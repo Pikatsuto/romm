@@ -492,7 +492,7 @@ class RetroArchDaemon:
 
             # Build ROM path
             from config import LIBRARY_BASE_PATH
-            rom_path = str(LIBRARY_BASE_PATH / rom.platform_slug / rom.full_path)
+            rom_path = os.path.join(str(LIBRARY_BASE_PATH), rom.full_path)
 
             logger.info(f"Using ROM path: {rom_path}")
 
