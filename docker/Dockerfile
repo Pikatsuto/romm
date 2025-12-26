@@ -4,6 +4,7 @@
 #   - backend-dev-build: Similar to `backend-build`, but also compiles and installs development dependencies
 #   - rahasher-build: Build RAHasher
 #   - emulator-stage: Fetch and extract emulators
+#   - retroarch-cores-stage: Fetch RetroArch cores for native streaming
 #   - nginx-build: Build nginx modules
 #   - production-stage: Setup frontend and backend
 #   - slim-image: Slim image with only the necessary files
@@ -122,6 +123,79 @@ RUN wget "https://github.com/ruffle-rs/ruffle/releases/download/${RUFFLE_VERSION
     rm -f "${RUFFLE_FILE}"
 
 
+# FETCH RETROARCH CORES
+FROM alpine:${ALPINE_VERSION}@sha256:${ALPINE_SHA256} AS retroarch-cores-stage
+
+RUN apk add --no-cache \
+    wget \
+    ca-certificates \
+    unzip
+
+# Core selection for major platforms (curated list of most reliable cores)
+ARG RETROARCH_CORES="\
+    snes9x_libretro.so \
+    bsnes_libretro.so \
+    genesis_plus_gx_libretro.so \
+    picodrive_libretro.so \
+    mgba_libretro.so \
+    vba_next_libretro.so \
+    fceumm_libretro.so \
+    nestopia_libretro.so \
+    mesen_libretro.so \
+    gambatte_libretro.so \
+    sameboy_libretro.so \
+    pcsx_rearmed_libretro.so \
+    beetle_psx_hw_libretro.so \
+    mupen64plus_next_libretro.so \
+    parallel_n64_libretro.so \
+    dolphin_libretro.so \
+    flycast_libretro.so \
+    ppsspp_libretro.so \
+    desmume_libretro.so \
+    melonds_libretro.so \
+    citra_libretro.so \
+    stella_libretro.so \
+    prosystem_libretro.so \
+    handy_libretro.so \
+    o2em_libretro.so \
+    virtualjaguar_libretro.so \
+    vecx_libretro.so \
+    mednafen_pce_fast_libretro.so \
+    mednafen_supergrafx_libretro.so \
+    mednafen_ngp_libretro.so \
+    mednafen_wswan_libretro.so \
+    mednafen_vb_libretro.so \
+    blastem_libretro.so \
+    bluemsx_libretro.so \
+    fmsx_libretro.so \
+    cap32_libretro.so \
+    vice_x64_libretro.so \
+    vice_x128_libretro.so \
+    vice_xvic_libretro.so \
+    puae_libretro.so \
+    atari800_libretro.so \
+    hatari_libretro.so \
+    fuse_libretro.so \
+    mame_libretro.so \
+    fbneo_libretro.so \
+    neocd_libretro.so \
+    np2kai_libretro.so \
+    x1_libretro.so \
+    quasi88_libretro.so \
+    px68k_libretro.so"
+
+RUN mkdir -p /cores && \
+    for core in ${RETROARCH_CORES}; do \
+        echo "Downloading ${core}..."; \
+        wget -q "http://buildbot.libretro.com/nightly/linux/x86_64/latest/${core}.zip" -O "/tmp/${core}.zip" || \
+        (echo "Warning: Failed to download ${core}, skipping..."; continue); \
+        unzip -q "/tmp/${core}.zip" -d /cores || \
+        (echo "Warning: Failed to extract ${core}, skipping..."; rm -f "/tmp/${core}.zip"; continue); \
+        rm -f "/tmp/${core}.zip"; \
+    done && \
+    echo "Downloaded cores:" && ls -lh /cores/
+
+
 # BUILD NGINX MODULE WITH MOD_ZIP
 FROM alpine:${ALPINE_VERSION}@sha256:${ALPINE_SHA256} AS nginx-build
 
@@ -164,7 +238,19 @@ RUN apk add --no-cache \
     libpq \
     7zip \
     tzdata \
-    valkey
+    valkey \
+    retroarch \
+    retroarch-assets \
+    retroarch-joypad-autoconfig \
+    xvfb \
+    xvfb-run \
+    pipewire \
+    pipewire-pulse \
+    wireplumber \
+    ffmpeg \
+    libx11 \
+    mesa-gl \
+    mesa-dri-gallium
 
 # Add Python by copying it from the official Docker image. This way, we don't rely on Alpine's
 # Python version, which could not be the same as the one used in the backend build stage.
@@ -193,6 +279,14 @@ COPY ./docker/nginx/js/ /etc/nginx/js/
 COPY ./docker/nginx/templates/ /etc/nginx/templates/
 COPY ./docker/nginx/default.conf /etc/nginx/nginx.conf
 COPY ./docker/gunicorn/logging.conf /etc/gunicorn/logging.conf
+
+# Setup RetroArch cores and configuration
+COPY --from=retroarch-cores-stage /cores/* /usr/lib/libretro/
+COPY ./docker/retroarch/retroarch.cfg /etc/retroarch.cfg
+
+# Create RetroArch runtime directories
+RUN mkdir -p /tmp/retroarch/saves /tmp/retroarch/states /tmp/retroarch/system /tmp/retroarch/screenshots && \
+    chmod -R 777 /tmp/retroarch
 
 # User permissions
 # - Create default user `romm` (1000) and group `romm` (1000).

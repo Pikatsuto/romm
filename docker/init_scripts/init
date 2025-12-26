@@ -13,6 +13,9 @@ ENABLE_SCHEDULED_RESCAN="${ENABLE_SCHEDULED_RESCAN:="false"}"
 ENABLE_SCHEDULED_UPDATE_LAUNCHBOX_METADATA="${ENABLE_SCHEDULED_UPDATE_LAUNCHBOX_METADATA:="false"}"
 ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB="${ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB:="false"}"
 
+# RetroArch streaming daemon
+RETROARCH_ENABLED="${RETROARCH_ENABLED:="false"}"
+
 # if REDIS_HOST is set, we assume that an external redis is used
 REDIS_HOST="${REDIS_HOST:=""}"
 
@@ -225,6 +228,20 @@ start_bin_watcher() {
 	echo "${WATCHER_PID}" >/tmp/watcher.pid
 }
 
+start_bin_retroarch_daemon() {
+	info_log "Starting RetroArch streaming daemon"
+
+	RETROARCH_ENABLED=${RETROARCH_ENABLED:-false}
+	if [[ ${RETROARCH_ENABLED} != "true" ]]; then
+		debug_log "RetroArch streaming is disabled"
+		return 0
+	fi
+
+	PYTHONPATH="/backend:${PYTHONPATH-}" python3 /backend/services/retroarch_daemon.py &
+	RETROARCH_DAEMON_PID=$!
+	echo "${RETROARCH_DAEMON_PID}" >/tmp/retroarch_daemon.pid
+}
+
 watchdog_process_pid() {
 	PROCESS=$1
 	if [[ -f "/tmp/${PROCESS}.pid" ]]; then
@@ -254,6 +271,7 @@ stop_process_pid() {
 
 shutdown() {
 	# shutdown in reverse order
+	stop_process_pid retroarch_daemon
 	stop_process_pid rq_worker
 	stop_process_pid rq_scheduler
 	stop_process_pid watcher
@@ -319,6 +337,11 @@ while ! ((exited)); do
 	# only start the watcher if enabled
 	if [[ ${ENABLE_RESCAN_ON_FILESYSTEM_CHANGE} == "true" ]]; then
 		watchdog_process_pid watcher
+	fi
+
+	# only start RetroArch daemon if enabled
+	if [[ ${RETROARCH_ENABLED} == "true" ]]; then
+		watchdog_process_pid retroarch_daemon
 	fi
 
 	watchdog_process_pid nginx
