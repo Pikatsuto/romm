@@ -3,6 +3,7 @@
 This module provides REST API endpoints for managing RetroArch streaming sessions.
 """
 
+import json
 import logging
 import uuid
 from typing import Annotated
@@ -14,6 +15,7 @@ from config.config_manager import config_manager
 from decorators.auth import protected_route
 from handler.auth.constants import Scope
 from handler.database import db_rom_handler
+from handler.redis_handler import async_cache
 from handler.retroarch_handler import (
     MAX_SESSIONS_DEFAULT,
     SessionState,
@@ -195,10 +197,12 @@ async def answer_stream(
     session.webrtc_answer = data.webrtc_answer
     await retroarch_handler.set_session(session)
 
-    # TODO: Signal daemon via Redis pubsub with the answer
+    # Store answer in Redis for daemon to pick up
+    answer_key = f"retroarch:webrtc_answer:{data.session_id}"
+    await async_cache.set(answer_key, data.webrtc_answer, ex=60)  # Expire after 60s
 
     log.debug(
-        f"WebRTC answer received for session {data.session_id}"
+        f"WebRTC answer received and stored in Redis for session {data.session_id}"
     )
 
     return {"status": "ok", "message": "WebRTC answer processed"}
@@ -241,9 +245,12 @@ async def stop_stream(
         f"Stopping RetroArch session {data.session_id}"
     )
 
-    # TODO: Signal daemon via Redis pubsub to stop the process
+    # Signal daemon via Redis to stop the process
+    stop_key = f"retroarch:stop:{data.session_id}"
+    await async_cache.set(stop_key, "1", ex=10)  # Expire after 10s
 
-    # Delete the session from Redis
+    # The daemon will delete the session when it processes the stop signal
+    # But we also delete it here to ensure cleanup
     await retroarch_handler.delete_session(data.session_id)
 
     return {"status": "ok", "message": "Session stopped"}
@@ -287,7 +294,10 @@ async def send_input(
     # Update activity timestamp
     await retroarch_handler.update_activity(session_id)
 
-    # TODO: Forward input to daemon via Redis pubsub
+    # Forward input to daemon via Redis list
+    input_key = f"retroarch:input:{session_id}"
+    await async_cache.rpush(input_key, json.dumps(input_event))
+    await async_cache.expire(input_key, 60)  # Expire list after 60s
 
     return {"status": "ok"}
 
