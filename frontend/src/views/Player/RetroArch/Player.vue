@@ -56,26 +56,16 @@ async function startSession() {
     sessionId.value = data.session_id;
     console.log("[RetroArch] Session created:", sessionId.value);
 
-    // TODO: Implement full RetroArch daemon integration
-    // For now, show a development message
-    statusMessage.value = "RetroArch Streaming - Coming Soon!";
-    error.value = "RetroArch streaming is still under development. The backend daemon to launch RetroArch processes and stream video via WebRTC is not yet implemented.";
-    isLoading.value = false;
-
-    /*
-    // This will be enabled once the RetroArch daemon is implemented:
-
     statusMessage.value = "Setting up WebRTC connection...";
 
     // 2. Setup WebRTC
     await setupWebRTC(data.webrtc_offer);
 
-    // 3. Connect SocketIO
+    // 3. Connect SocketIO for signaling
     connectSocket();
 
     statusMessage.value = "Connected! Starting stream...";
     isLoading.value = false;
-    */
   } catch (err) {
     // Provide user-friendly error messages
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -112,7 +102,7 @@ async function setupWebRTC(offerSdp: string) {
     console.log("[RetroArch] Received media track:", event.track.kind);
     if (videoRef.value && event.streams[0]) {
       videoRef.value.srcObject = event.streams[0];
-      videoRef.value.play().catch((err) => {
+      videoRef.value.play().catch((err: Error) => {
         console.error("[RetroArch] Failed to play video:", err);
       });
     }
@@ -169,7 +159,7 @@ function connectSocket() {
     console.log("[RetroArch] SocketIO disconnected");
   });
 
-  socket.value.on("connect_error", (err) => {
+  socket.value.on("connect_error", (err: Error) => {
     console.error("[RetroArch] SocketIO connection error:", err);
   });
 }
