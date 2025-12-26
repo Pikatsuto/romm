@@ -124,7 +124,7 @@ class RetroArchSessionHandler:
         Returns:
             List of user's sessions
         """
-        all_sessions = await self._get_all_sessions()
+        all_sessions = await self.get_all_sessions()
         return [s for s in all_sessions if s.user_id == user_id]
 
     async def get_active_sessions_count(self) -> int:
@@ -133,7 +133,7 @@ class RetroArchSessionHandler:
         Returns:
             Count of active sessions
         """
-        all_sessions = await self._get_all_sessions()
+        all_sessions = await self.get_all_sessions()
         return len(
             [
                 s
@@ -148,7 +148,7 @@ class RetroArchSessionHandler:
         Returns:
             Number of sessions cleaned up
         """
-        all_sessions = await self._get_all_sessions()
+        all_sessions = await self.get_all_sessions()
         now = datetime.utcnow()
         cutoff = now - timedelta(minutes=SESSION_TIMEOUT_MINUTES)
         cleaned_count = 0
@@ -186,7 +186,7 @@ class RetroArchSessionHandler:
             session.last_activity = datetime.utcnow().isoformat()
             await self.set_session(session)
 
-    async def _get_all_sessions(self) -> list[RetroArchSession]:
+    async def get_all_sessions(self) -> list[RetroArchSession]:
         """Get all sessions from Redis.
 
         Returns:
@@ -205,6 +205,20 @@ class RetroArchSessionHandler:
                 log.error(f"Failed to deserialize session: {e}")
 
         return sessions
+
+    async def update_session_state(
+        self, session_id: str, state: SessionState
+    ) -> None:
+        """Update session state.
+
+        Args:
+            session_id: Session to update
+            state: New state
+        """
+        session = await self.get_session(session_id)
+        if session:
+            session.state = state
+            await self.set_session(session)
 
 
 # Global handler instance

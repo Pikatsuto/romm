@@ -408,17 +408,18 @@ class RetroArchDaemon:
 
     async def _handle_session_events(self):
         """Handle incoming session events from Redis"""
-        # This is a placeholder - in production, you'd use Redis pubsub
-        # to listen for events from the REST API
         while self.running:
             try:
                 # Check for new sessions in Redis
                 sessions = await retroarch_handler.get_all_sessions()
 
-                for session_id, session_data in sessions.items():
-                    if session_id not in self.instances and session_data.get("state") == "STARTING":
+                for session in sessions:
+                    if (
+                        session.session_id not in self.instances
+                        and session.state == retroarch_handler.SessionState.STARTING
+                    ):
                         # Start new session
-                        await self._start_session(session_id, session_data)
+                        await self._start_session(session)
 
                 await asyncio.sleep(1)
 
