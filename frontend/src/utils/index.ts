@@ -539,6 +539,250 @@ export function getSupportedEJSCores(platformSlug: string): string[] {
 }
 
 /**
+ * Map of supported RetroArch cores for each platform.
+ * Cores are prefixed with "ra-" to distinguish them from EmulatorJS cores.
+ * Only includes platforms with well-maintained RetroArch cores.
+ */
+const _RETROARCH_CORES_MAP: Record<string, string[]> = {
+  // Nintendo consoles
+  nes: ["ra-fceumm", "ra-nestopia", "ra-mesen"],
+  famicom: ["ra-fceumm", "ra-nestopia", "ra-mesen"],
+  fds: ["ra-fceumm", "ra-nestopia"],
+  snes: ["ra-snes9x", "ra-bsnes"],
+  sfam: ["ra-snes9x", "ra-bsnes"],
+  n64: ["ra-mupen64plus_next", "ra-parallel_n64"],
+  "64dd": ["ra-mupen64plus_next"],
+  ngc: ["ra-dolphin"],
+  wii: ["ra-dolphin"],
+  wiiu: ["ra-cemu"],
+  switch: ["ra-yuzu"],
+
+  // Nintendo handhelds
+  gb: ["ra-gambatte", "ra-sameboy", "ra-mgba"],
+  gbc: ["ra-gambatte", "ra-sameboy", "ra-mgba"],
+  gba: ["ra-mgba", "ra-vba_next"],
+  nds: ["ra-desmume", "ra-melonds"],
+  "3ds": ["ra-citra"],
+  "pokemon-mini": ["ra-pokemini"],
+  virtualboy: ["ra-beetle_vb"],
+
+  // Sega consoles
+  genesis: ["ra-genesis_plus_gx", "ra-picodrive"],
+  "sega-mega-drive-2-slash-genesis": ["ra-genesis_plus_gx", "ra-picodrive"],
+  "sega-mega-jet": ["ra-genesis_plus_gx", "ra-picodrive"],
+  "mega-pc": ["ra-genesis_plus_gx", "ra-picodrive"],
+  "tera-drive": ["ra-genesis_plus_gx", "ra-picodrive"],
+  "sega-nomad": ["ra-genesis_plus_gx", "ra-picodrive"],
+  sega32: ["ra-picodrive"],
+  segacd: ["ra-genesis_plus_gx"],
+  segacd32: ["ra-genesis_plus_gx", "ra-picodrive"],
+  saturn: ["ra-beetle_saturn", "ra-yabause", "ra-kronos"],
+  dc: ["ra-flycast", "ra-redream"],
+  sms: ["ra-genesis_plus_gx", "ra-picodrive"],
+  "sega-mark-iii": ["ra-genesis_plus_gx"],
+  "sega-master-system-ii": ["ra-genesis_plus_gx"],
+  "master-system-super-compact": ["ra-genesis_plus_gx"],
+  "master-system-girl": ["ra-genesis_plus_gx"],
+  gamegear: ["ra-genesis_plus_gx"],
+  sg1000: ["ra-genesis_plus_gx"],
+  sc3000: ["ra-bluemsx"],
+  "sega-pico": ["ra-picodrive"],
+  pico: ["ra-picodrive"],
+
+  // Sony consoles
+  psx: ["ra-pcsx_rearmed", "ra-beetle_psx_hw", "ra-swanstation"],
+  ps2: ["ra-pcsx2"],
+  ps3: ["ra-rpcs3"],
+  psp: ["ra-ppsspp"],
+  psvita: ["ra-vita3k"],
+
+  // Atari
+  atari2600: ["ra-stella"],
+  atari5200: ["ra-a5200"],
+  atari7800: ["ra-prosystem"],
+  atari8bit: ["ra-atari800"],
+  atari800: ["ra-atari800"],
+  "atari-st": ["ra-hatari"],
+  lynx: ["ra-handy", "ra-beetle_lynx"],
+  jaguar: ["ra-virtualjaguar"],
+  "atari-jaguar-cd": ["ra-virtualjaguar"],
+
+  // NEC
+  tg16: ["ra-beetle_pce", "ra-mednafen_pce_fast"],
+  "turbografx-cd": ["ra-beetle_pce"],
+  supergrafx: ["ra-beetle_supergrafx"],
+  "pc-fx": ["ra-beetle_pcfx"],
+  "pc-8800-series": ["ra-quasi88"],
+  "pc-9800-series": ["ra-np2kai"],
+
+  // Arcade
+  arcade: ["ra-fbneo", "ra-mame", "ra-mame2003_plus"],
+  "neo-geo-cd": ["ra-fbneo", "ra-neocd"],
+  neogeoaes: ["ra-fbneo"],
+  neogeomvs: ["ra-fbneo"],
+  "neo-geo-pocket": ["ra-beetle_ngp"],
+  "neo-geo-pocket-color": ["ra-beetle_ngp"],
+
+  // Other consoles
+  "3do": ["ra-opera"],
+  colecovision: ["ra-bluemsx", "ra-gearcoleco"],
+  intellivision: ["ra-freeintv"],
+  odyssey: ["ra-o2em"],
+  "odyssey-2": ["ra-o2em"],
+  vectrex: ["ra-vecx"],
+  "fairchild-channel-f": ["ra-freechaf"],
+  "bally-astrocade": ["ra-mame"],
+  astrocade: ["ra-mame"],
+  "philips-cd-i": ["ra-same_cdi"],
+
+  // Computers
+  c64: ["ra-vice_x64"],
+  "vic-20": ["ra-vice_xvic"],
+  c128: ["ra-vice_x128"],
+  "c-plus-4": ["ra-vice_xplus4"],
+  c16: ["ra-vice_xplus4"],
+  amiga: ["ra-puae"],
+  "amiga-cd32": ["ra-puae"],
+  "amiga-cd": ["ra-puae"],
+  "commodore-cdtv": ["ra-puae"],
+  acpc: ["ra-cap32", "ra-crocods"],
+  "amstrad-gx4000": ["ra-cap32"],
+  zxs: ["ra-fuse"],
+  zx81: ["ra-eightyone"],
+  zx80: ["ra-eightyone"],
+  "zx-spectrum-next": ["ra-fuse"],
+  msx: ["ra-bluemsx", "ra-fmsx"],
+  msx2: ["ra-bluemsx"],
+  msx2plus: ["ra-bluemsx"],
+  "msx-turbo": ["ra-bluemsx"],
+  dos: ["ra-dosbox_pure", "ra-dosbox_svn"],
+  "sharp-x68000": ["ra-px68k"],
+  x1: ["ra-x1"],
+  "pc-6001": ["ra-pc6001"],
+  "fm-7": ["ra-xm7"],
+  "fm-towns": ["ra-tsugaru"],
+  bbcmicro: ["ra-b-em"],
+  "apple-iigs": ["ra-mame"],
+  appleii: ["ra-mame"],
+  scummvm: ["ra-scummvm"],
+
+  // Handhelds
+  wonderswan: ["ra-beetle_wswan"],
+  "wonderswan-color": ["ra-beetle_wswan"],
+  swancrystal: ["ra-beetle_wswan"],
+  "g-and-w": ["ra-gw"],
+  "game-dot-com": ["ra-gamecom"],
+  "mega-duck-slash-cougar-boy": ["ra-sameduck"],
+  supervision: ["ra-potator"],
+  hartung: ["ra-potator"],
+  palmtex: ["ra-potator"],
+  gamate: ["ra-mame"],
+  microvision: ["ra-mame"],
+
+  // Additional systems with RetroArch support
+  "casio-loopy": ["ra-mame"],
+  "casio-pv-1000": ["ra-mame"],
+  multivision: ["ra-mame"],
+  creativision: ["ra-mame"],
+  "epoch-cassette-vision": ["ra-mame"],
+  "epoch-super-cassette-vision": ["ra-mame"],
+  pocketstation: ["ra-mame"],
+  vmu: ["ra-vemulator"],
+  uzebox: ["ra-uzem"],
+  arduboy: ["ra-arduboy"],
+  pokitto: ["ra-mame"],
+  "wasm-4": ["ra-wasm4"],
+  "philips-vg-5000": ["ra-mame"],
+  aquarius: ["ra-mame"],
+  oric: ["ra-oricutron"],
+  atmos: ["ra-oricutron"],
+  "jupiter-ace": ["ra-mame"],
+  "sam-coupe": ["ra-mame"],
+  "thomson-mo5": ["ra-theodore"],
+  "thomson-to": ["ra-theodore"],
+  "tomy-tutor": ["ra-mame"],
+  "sord-m5": ["ra-mame"],
+  spectravideo: ["ra-bluemsx"],
+  "super-acan": ["ra-mame"],
+  "super-vision-8000": ["ra-potator"],
+  "rca-studio-ii": ["ra-mame"],
+  "interton-vc-4000": ["ra-mame"],
+  "vc-4000": ["ra-mame"],
+  "videopac-g7400": ["ra-o2em"],
+  "atari-xegs": ["ra-atari800"],
+  "trs-80": ["ra-mame"],
+  "trs-80-color-computer": ["ra-mame"],
+  cpet: ["ra-vice_xpet"],
+  atom: ["ra-mame"],
+  "acorn-electron": ["ra-elkulator"],
+  "acorn-archimedes": ["ra-mame"],
+  "dragon-32-slash-64": ["ra-mame"],
+  "camputers-lynx": ["ra-mame"],
+  enterprise: ["ra-mame"],
+  galaksija: ["ra-mame"],
+  "colour-genie": ["ra-mame"],
+  "smc-777": ["ra-mame"],
+  mtx512: ["ra-mame"],
+  "memotech-mtx": ["ra-mame"],
+  "sinclair-ql": ["ra-mame"],
+  "tatung-einstein": ["ra-mame"],
+  exelvision: ["ra-mame"],
+  laser200: ["ra-mame"],
+  "ti-994a": ["ra-mame"],
+  "ti-99": ["ra-mame"],
+  colecoadam: ["ra-mame"],
+  hrx: ["ra-mame"],
+  "exidy-sorcerer": ["ra-mame"],
+} as const;
+
+export type RetroArchPlatformSlug = keyof typeof _RETROARCH_CORES_MAP;
+
+/**
+ * Get supported cores for a platform (EmulatorJS + RetroArch).
+ * RetroArch cores have "ra-" prefix and are only included if RetroArch is enabled.
+ *
+ * @param platformSlug The platform slug.
+ * @param retroarchEnabled Whether RetroArch streaming is enabled.
+ * @returns An array of supported cores.
+ */
+export function getSupportedCores(
+  platformSlug: string,
+  retroarchEnabled: boolean = false
+): string[] {
+  const ejsCores = getSupportedEJSCores(platformSlug);
+
+  if (!retroarchEnabled) {
+    return ejsCores;
+  }
+
+  const raCores = _RETROARCH_CORES_MAP[
+    platformSlug.toLowerCase() as RetroArchPlatformSlug
+  ] || [];
+
+  return [...ejsCores, ...raCores];
+}
+
+/**
+ * Check if a core is a RetroArch core (prefixed with "ra-").
+ *
+ * @param core The core name.
+ * @returns True if it's a RetroArch core, false otherwise.
+ */
+export function isRetroArchCore(core: string): boolean {
+  return core.startsWith("ra-");
+}
+
+/**
+ * Get the actual RetroArch core name (without "ra-" prefix).
+ *
+ * @param core The core name with prefix.
+ * @returns The core name without prefix.
+ */
+export function getRetroArchCoreName(core: string): string {
+  return core.replace(/^ra-/, "");
+}
+
+/**
  * Check if a given EJS core requires threads enabled.
  *
  * @param core The core name.

@@ -17,9 +17,14 @@ import storeConfig from "@/stores/config";
 import storePlaying from "@/stores/playing";
 import { type DetailedRom } from "@/stores/roms";
 import type { Events } from "@/types/emitter";
-import { getSupportedEJSCores } from "@/utils";
+import {
+  getSupportedCores,
+  isRetroArchCore,
+  getRetroArchCoreName,
+} from "@/utils";
 import CacheDialog from "@/views/Player/EmulatorJS/CacheDialog.vue";
-import Player from "@/views/Player/EmulatorJS/Player.vue";
+import EJSPlayer from "@/views/Player/EmulatorJS/Player.vue";
+import RetroArchPlayer from "@/views/Player/RetroArch/Player.vue";
 
 const { t } = useI18n();
 const { xs, mdAndUp, smAndDown } = useDisplay();
@@ -48,6 +53,10 @@ const compatibleStates = computed(
     ) ?? [],
 );
 
+const isRetroArchSelected = computed(() =>
+  selectedCore.value ? isRetroArchCore(selectedCore.value) : false
+);
+
 async function onPlay() {
   if (rom.value && auth.scopes.includes("roms.user.write")) {
     romApi.updateUserRomProps({
@@ -61,6 +70,12 @@ async function onPlay() {
   window.EJS_fullscreenOnLoaded = fullScreenOnPlay.value;
   fullScreen.value = fullScreenOnPlay.value;
   playing.value = true;
+
+  // Skip EmulatorJS loading for RetroArch cores
+  if (isRetroArchSelected.value) {
+    console.log("[Play] RetroArch core selected, skipping EmulatorJS loader");
+    return;
+  }
 
   const { EJS_NETPLAY_ENABLED } = configStore.config;
   const EMULATORJS_VERSION = EJS_NETPLAY_ENABLED ? "nightly" : "4.2.3";
@@ -167,7 +182,12 @@ onMounted(async () => {
   });
   firmwareOptions.value = firmwareResponse.data;
 
-  supportedCores.value = [...getSupportedEJSCores(rom.value.platform_slug)];
+  supportedCores.value = [
+    ...getSupportedCores(
+      rom.value.platform_slug,
+      configStore.config.RETROARCH_ENABLED
+    ),
+  ];
 
   // Listen for save/state selection from dialogs
   emitter?.on("saveSelected", selectSave);
@@ -564,13 +584,24 @@ function openCacheDialog() {
 
     <template v-else>
       <v-col id="game-wrapper" cols="12" class="bg-background pr-2" rounded>
-        <Player
+        <!-- EmulatorJS Player -->
+        <EJSPlayer
+          v-if="!isRetroArchSelected"
           :rom="rom"
           :state="selectedState"
           :save="selectedSave"
           :bios="selectedFirmware"
           :core="selectedCore"
           :disc="selectedDisc"
+        />
+
+        <!-- RetroArch Player -->
+        <RetroArchPlayer
+          v-else
+          :rom="rom"
+          :state="selectedState"
+          :save="selectedSave"
+          :core="getRetroArchCoreName(selectedCore || '')"
         />
       </v-col>
     </template>
