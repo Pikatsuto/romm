@@ -199,6 +199,15 @@ SCHEDULED_RETROACHIEVEMENTS_PROGRESS_SYNC_CRON: Final[str] = _get_env(
 DISABLE_EMULATOR_JS: Final[bool] = safe_str_to_bool(_get_env("DISABLE_EMULATOR_JS"))
 DISABLE_RUFFLE_RS: Final[bool] = safe_str_to_bool(_get_env("DISABLE_RUFFLE_RS"))
 
+# RETROARCH
+RETROARCH_ENABLED: Final[bool] = safe_str_to_bool(_get_env("RETROARCH_ENABLED"))
+RETROARCH_MAX_SESSIONS: Final[int] = safe_int(
+    _get_env("RETROARCH_MAX_SESSIONS"), 3
+)
+RETROARCH_CORES_PATH: Final[str] = _get_env(
+    "RETROARCH_CORES_PATH", "/usr/lib/libretro"
+)
+
 # FRONTEND
 UPLOAD_TIMEOUT: Final[int] = safe_int(_get_env("UPLOAD_TIMEOUT"), 600)
 KIOSK_MODE: Final[bool] = safe_str_to_bool(_get_env("KIOSK_MODE"))

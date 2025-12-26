@@ -23,6 +23,10 @@ class ConfigResponse(TypedDict):
     EJS_NETPLAY_ICE_SERVERS: list[NetplayICEServer]
     EJS_SETTINGS: dict[str, dict[str, str]]
     EJS_CONTROLS: dict[str, EjsControls]
+    RETROARCH_ENABLED: bool
+    RETROARCH_MAX_SESSIONS: int
+    RETROARCH_CORES_PATH: str
+    RETROARCH_PLATFORM_CORES: dict[str, str]
     SCAN_METADATA_PRIORITY: list[str]
     SCAN_ARTWORK_PRIORITY: list[str]
     SCAN_REGION_PRIORITY: list[str]

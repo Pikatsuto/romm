@@ -17,6 +17,9 @@ from config import (
     DB_QUERY_JSON,
     DB_USER,
     LIBRARY_BASE_PATH,
+    RETROARCH_CORES_PATH,
+    RETROARCH_ENABLED,
+    RETROARCH_MAX_SESSIONS,
     ROMM_BASE_PATH,
     ROMM_DB_DRIVER,
 )
@@ -90,6 +93,10 @@ class Config:
     EJS_NETPLAY_ICE_SERVERS: list[NetplayICEServer]
     EJS_SETTINGS: dict[str, EjsOption]  # core_name -> EjsOption
     EJS_CONTROLS: dict[str, EjsControls]  # core_name -> EjsControls
+    RETROARCH_ENABLED: bool
+    RETROARCH_MAX_SESSIONS: int
+    RETROARCH_CORES_PATH: str
+    RETROARCH_PLATFORM_CORES: dict[str, str]  # platform_slug -> core_name
     SCAN_METADATA_PRIORITY: list[str]
     SCAN_ARTWORK_PRIORITY: list[str]
     SCAN_REGION_PRIORITY: list[str]
@@ -244,6 +251,21 @@ class ConfigManager:
             ),
             EJS_SETTINGS=pydash.get(self._raw_config, "emulatorjs.settings", {}),
             EJS_CONTROLS=self._get_ejs_controls(),
+            # RetroArch: Environment variables take precedence over config.yml
+            RETROARCH_ENABLED=RETROARCH_ENABLED
+            if RETROARCH_ENABLED
+            else pydash.get(self._raw_config, "retroarch.enabled", False),
+            RETROARCH_MAX_SESSIONS=RETROARCH_MAX_SESSIONS
+            if RETROARCH_MAX_SESSIONS != 3
+            else pydash.get(self._raw_config, "retroarch.max_sessions", 3),
+            RETROARCH_CORES_PATH=RETROARCH_CORES_PATH
+            if RETROARCH_CORES_PATH != "/usr/lib/libretro"
+            else pydash.get(
+                self._raw_config, "retroarch.cores_path", "/usr/lib/libretro"
+            ),
+            RETROARCH_PLATFORM_CORES=pydash.get(
+                self._raw_config, "retroarch.platform_cores", {}
+            ),
             SCAN_METADATA_PRIORITY=pydash.get(
                 self._raw_config,
                 "scan.priority.metadata",
