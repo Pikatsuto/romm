@@ -403,8 +403,11 @@ class RetroArchDaemon:
     async def _subscribe_to_events(self):
         """Subscribe to Redis pubsub channels for session events"""
         try:
-            # Subscribe to session start/stop/input events
+            # Subscribe to session start events (polling-based)
             asyncio.create_task(self._handle_session_events())
+
+            # Subscribe to Redis pubsub for real-time events
+            asyncio.create_task(self._handle_pubsub_events())
         except Exception as e:
             logger.error(f"Failed to subscribe to events: {e}")
 
@@ -428,6 +431,50 @@ class RetroArchDaemon:
             except Exception as e:
                 logger.error(f"Error handling session events: {e}")
                 await asyncio.sleep(5)
+
+    async def _handle_pubsub_events(self):
+        """Handle Redis pubsub events for WebRTC signaling, stop, and input"""
+        # Note: This is a simplified implementation
+        # In production, you would use actual Redis pubsub
+        # For now, we'll check Redis keys for these events
+        while self.running:
+            try:
+                # Check for WebRTC answers in Redis
+                for session_id, instance in list(self.instances.items()):
+                    # Check for WebRTC answer
+                    answer_key = f"retroarch:webrtc_answer:{session_id}"
+                    answer_sdp = await async_cache.get(answer_key)
+                    if answer_sdp and instance.peer_connection:
+                        await instance.set_webrtc_answer(answer_sdp)
+                        await async_cache.delete(answer_key)
+                        logger.info(f"Processed WebRTC answer for session {session_id}")
+
+                    # Check for stop signal
+                    stop_key = f"retroarch:stop:{session_id}"
+                    stop_signal = await async_cache.get(stop_key)
+                    if stop_signal:
+                        logger.info(f"Received stop signal for session {session_id}")
+                        await self._stop_session(session_id)
+                        await async_cache.delete(stop_key)
+
+                    # Check for input events
+                    input_key = f"retroarch:input:{session_id}"
+                    input_data = await async_cache.lpop(input_key)
+                    if input_data:
+                        try:
+                            event = json.loads(input_data)
+                            await instance.send_input(
+                                event.get("code", ""),
+                                event.get("type", "")
+                            )
+                        except (json.JSONDecodeError, KeyError) as e:
+                            logger.error(f"Invalid input event: {e}")
+
+                await asyncio.sleep(0.1)  # Poll faster for real-time events
+
+            except Exception as e:
+                logger.error(f"Error handling pubsub events: {e}")
+                await asyncio.sleep(1)
 
     async def _start_session(self, session: retroarch_handler.RetroArchSession):
         """Start a new RetroArch streaming session"""
