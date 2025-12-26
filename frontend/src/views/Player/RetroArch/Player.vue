@@ -45,12 +45,19 @@ async function startSession() {
   try {
     statusMessage.value = "Starting RetroArch session...";
 
-    // 1. Start session
+    // Detect screen dimensions and orientation
+    const screenWidth = window.screen.width;
+    const screenHeight = window.screen.height;
+    const isPortrait = screenHeight > screenWidth;
+
+    // 1. Start session with screen dimensions
     const { data } = await retroarchApi.startSession({
       romId: props.rom.id,
       core: props.core,
       saveId: props.save?.id,
       stateId: props.state?.id,
+      screenWidth,
+      screenHeight,
     });
 
     sessionId.value = data.session_id;
@@ -219,6 +226,51 @@ function handleKeyUp(event: KeyboardEvent) {
   });
 }
 
+function handleMouseMove(event: MouseEvent) {
+  if (!socket.value || !sessionId.value || !videoRef.value) return;
+
+  const rect = videoRef.value.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * 65535;
+  const y = ((event.clientY - rect.top) / rect.height) * 65535;
+
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "mousemove",
+      x: Math.floor(x),
+      y: Math.floor(y),
+      timestamp: Date.now(),
+    },
+  });
+}
+
+function handleMouseDown(event: MouseEvent) {
+  if (!socket.value || !sessionId.value) return;
+
+  event.preventDefault();
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "mousedown",
+      button: event.button,
+      timestamp: Date.now(),
+    },
+  });
+}
+
+function handleMouseUp(event: MouseEvent) {
+  if (!socket.value || !sessionId.value) return;
+
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "mouseup",
+      button: event.button,
+      timestamp: Date.now(),
+    },
+  });
+}
+
 function exitToGameDetails() {
   router.push({ name: ROUTES.ROM, params: { rom: props.rom.id } });
 }
@@ -254,6 +306,9 @@ function exitToGameDetails() {
       playsinline
       class="game-video"
       :class="{ hidden: isLoading || error }"
+      @mousemove="handleMouseMove"
+      @mousedown="handleMouseDown"
+      @mouseup="handleMouseUp"
     />
 
     <!-- Controls Overlay -->
@@ -291,9 +346,23 @@ function exitToGameDetails() {
 }
 
 .game-video {
-  width: 100%;
-  height: 100%;
   object-fit: contain;
+}
+
+/* Portrait orientation: fill width, auto height with max constraint */
+@media (orientation: portrait) {
+  .game-video {
+    width: 100vw;
+    max-height: 100vh;
+  }
+}
+
+/* Landscape orientation: fill height, auto width with max constraint */
+@media (orientation: landscape) {
+  .game-video {
+    height: 100vh;
+    max-width: 100vw;
+  }
 }
 
 .game-video.hidden {
