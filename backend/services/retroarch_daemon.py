@@ -36,7 +36,9 @@ from av import AudioFrame, VideoFrame
 
 from config import config_manager
 from handler import retroarch_handler
+from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
+from models.rom import Rom
 
 logger = logging.getLogger(__name__)
 
@@ -427,64 +429,92 @@ class RetroArchDaemon:
                 logger.error(f"Error handling session events: {e}")
                 await asyncio.sleep(5)
 
-    async def _start_session(self, session_id: str, session_data: dict):
+    async def _start_session(self, session: retroarch_handler.RetroArchSession):
         """Start a new RetroArch streaming session"""
         try:
-            logger.info(f"Starting session {session_id}")
+            logger.info(f"Starting session {session.session_id}")
+
+            # Get ROM from database
+            rom = db_rom_handler.get_rom(session.rom_id)
+            if not rom:
+                logger.error(f"ROM {session.rom_id} not found for session {session.session_id}")
+                await retroarch_handler.update_session_state(
+                    session.session_id, retroarch_handler.SessionState.ERROR
+                )
+                return
+
+            # Build ROM path
+            from config import LIBRARY_BASE_PATH
+            rom_path = str(LIBRARY_BASE_PATH / rom.platform_slug / rom.full_path)
+
+            logger.info(f"Using ROM path: {rom_path}")
 
             # Allocate Xvfb display
             display_num = await self.xvfb_manager.allocate_display()
             if display_num is None:
-                logger.error(f"Failed to allocate display for session {session_id}")
-                await retroarch_handler.update_session_state(session_id, "ERROR")
+                logger.error(f"Failed to allocate display for session {session.session_id}")
+                await retroarch_handler.update_session_state(
+                    session.session_id, retroarch_handler.SessionState.ERROR
+                )
                 return
 
             # Create instance
             instance = RetroArchInstance(
-                session_id=session_id,
-                rom_path=session_data["rom_path"],
-                core=session_data["core"],
-                save_path=session_data.get("save_path"),
-                state_path=session_data.get("state_path"),
+                session_id=session.session_id,
+                rom_path=rom_path,
+                core=session.core,
+                save_path=None,  # TODO: Build save path from session.save_id
+                state_path=None,  # TODO: Build state path from session.state_id
                 display_num=display_num,
             )
 
             # Start RetroArch
             if not await instance.start_retroarch():
-                logger.error(f"Failed to start RetroArch for session {session_id}")
+                logger.error(f"Failed to start RetroArch for session {session.session_id}")
                 await self.xvfb_manager.release_display(display_num)
-                await retroarch_handler.update_session_state(session_id, "ERROR")
+                await retroarch_handler.update_session_state(
+                    session.session_id, retroarch_handler.SessionState.ERROR
+                )
                 return
 
             # Start streaming
             if not await instance.start_streaming():
-                logger.error(f"Failed to start streaming for session {session_id}")
+                logger.error(f"Failed to start streaming for session {session.session_id}")
                 await instance.stop()
                 await self.xvfb_manager.release_display(display_num)
-                await retroarch_handler.update_session_state(session_id, "ERROR")
+                await retroarch_handler.update_session_state(
+                    session.session_id, retroarch_handler.SessionState.ERROR
+                )
                 return
 
             # Create WebRTC offer
             offer_sdp = await instance.create_webrtc_offer()
             if not offer_sdp:
-                logger.error(f"Failed to create WebRTC offer for session {session_id}")
+                logger.error(f"Failed to create WebRTC offer for session {session.session_id}")
                 await instance.stop()
                 await self.xvfb_manager.release_display(display_num)
-                await retroarch_handler.update_session_state(session_id, "ERROR")
+                await retroarch_handler.update_session_state(
+                    session.session_id, retroarch_handler.SessionState.ERROR
+                )
                 return
 
             # Store instance
-            self.instances[session_id] = instance
+            self.instances[session.session_id] = instance
 
-            # Update session in Redis
-            await retroarch_handler.update_session_webrtc_offer(session_id, offer_sdp)
-            await retroarch_handler.update_session_state(session_id, "RUNNING")
+            # Update session in Redis with WebRTC offer and running state
+            session.webrtc_offer = offer_sdp
+            session.state = retroarch_handler.SessionState.RUNNING
+            session.pid = instance.retroarch_process.pid if instance.retroarch_process else None
+            session.xvfb_display = display_num
+            await retroarch_handler.set_session(session)
 
-            logger.info(f"Session {session_id} started successfully")
+            logger.info(f"Session {session.session_id} started successfully")
 
         except Exception as e:
-            logger.error(f"Failed to start session {session_id}: {e}")
-            await retroarch_handler.update_session_state(session_id, "ERROR")
+            logger.error(f"Failed to start session {session.session_id}: {e}")
+            await retroarch_handler.update_session_state(
+                session.session_id, retroarch_handler.SessionState.ERROR
+            )
 
     async def _stop_session(self, session_id: str):
         """Stop a RetroArch streaming session"""
@@ -505,7 +535,9 @@ class RetroArchDaemon:
             del self.instances[session_id]
 
             # Update session in Redis
-            await retroarch_handler.update_session_state(session_id, "STOPPED")
+            await retroarch_handler.update_session_state(
+                session_id, retroarch_handler.SessionState.STOPPED
+            )
 
             logger.info(f"Session {session_id} stopped")
 
