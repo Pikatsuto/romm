@@ -38,6 +38,8 @@ class StartSessionRequest(BaseModel):
     core: str
     save_id: int | None = None
     state_id: int | None = None
+    screen_width: int | None = None
+    screen_height: int | None = None
 
 
 class StartSessionResponse(BaseModel):
@@ -148,6 +150,15 @@ async def start_stream(
     )
 
     await retroarch_handler.set_session(session)
+
+    # Store screen dimensions in Redis for daemon
+    if data.screen_width and data.screen_height:
+        dims_key = f"retroarch:screen_dims:{session_id}"
+        await async_cache.set(
+            dims_key,
+            json.dumps({"width": data.screen_width, "height": data.screen_height}),
+            ex=300  # Expire after 5 minutes
+        )
 
     # Wait for daemon to start RetroArch and generate WebRTC offer
     # Poll the session for up to 30 seconds

@@ -43,6 +43,130 @@ from models.rom import Rom
 logger = logging.getLogger(__name__)
 
 
+# Standard resolutions (landscape format)
+# Will be automatically rotated for portrait orientation
+STANDARD_RESOLUTIONS = [
+    # 4K / UHD (PC, TV)
+    (3840, 2160),
+    (3440, 1440),  # Ultrawide 21:9
+    # 2K / QHD (PC, TV)
+    (2560, 1440),
+    (2560, 1080),  # Ultrawide 21:9
+    # Full HD+ (PC, TV, Phone landscape - modern aspect ratios)
+    (2400, 1080),  # 20:9
+    (2340, 1080),  # 19.5:9 (notch)
+    (2280, 1080),  # 19:9
+    (2160, 1080),  # 18:9
+    # Full HD (PC, TV, Phone landscape - standard)
+    (1920, 1200),  # 16:10
+    (1920, 1080),  # 16:9
+    # QHD+ Phone landscape
+    (3200, 1440),  # 20:9
+    (3040, 1440),  # 19:9
+    (2960, 1440),  # 18.5:9
+    # HD+ / HD (PC, Phone - modern aspect ratios)
+    (1600, 900),   # 16:9
+    (1600, 720),   # 20:9
+    (1560, 720),   # 19.5:9
+    (1520, 720),   # 19:9
+    (1480, 720),   # 18.5:9
+    # HD (PC, Phone)
+    (1366, 768),   # 16:9
+    (1280, 800),   # 16:10
+    (1280, 720),   # 16:9
+    # Lower resolutions
+    (1024, 768),   # 4:3
+    (960, 540),    # 16:9
+    (854, 480),    # 16:9
+    (800, 600),    # 4:3
+]
+
+
+def calculate_optimal_resolution(screen_width: int, screen_height: int, max_resolution: str | None = None) -> tuple[int, int]:
+    """
+    Calculate optimal Xvfb resolution based on screen dimensions.
+
+    Args:
+        screen_width: Client screen width in pixels
+        screen_height: Client screen height in pixels
+        max_resolution: Optional max resolution in format "WIDTHxHEIGHT" (e.g., "1920x1080")
+
+    Returns:
+        Tuple of (width, height) for Xvfb display
+    """
+    # Parse max resolution if provided
+    max_width = None
+    max_height = None
+    if max_resolution:
+        try:
+            parts = max_resolution.lower().split('x')
+            if len(parts) == 2:
+                max_width = int(parts[0])
+                max_height = int(parts[1])
+        except (ValueError, IndexError):
+            logger.warning(f"Invalid max resolution format: {max_resolution}, ignoring")
+
+    # Determine orientation
+    is_portrait = screen_height > screen_width
+
+    # Build available resolutions (swap width/height for portrait)
+    available_resolutions = []
+    for width, height in STANDARD_RESOLUTIONS:
+        if is_portrait:
+            # Swap for portrait orientation
+            res_width, res_height = height, width
+        else:
+            res_width, res_height = width, height
+
+        # Filter by max resolution if specified
+        if max_width and max_height:
+            if res_width <= max_width and res_height <= max_height:
+                available_resolutions.append((res_width, res_height))
+        else:
+            available_resolutions.append((res_width, res_height))
+
+    # Fallback if no resolutions available after filtering
+    if not available_resolutions:
+        if max_width and max_height:
+            logger.warning(f"No resolutions available below max {max_width}x{max_height}, using max")
+            return (max_width, max_height)
+        else:
+            default = (1280, 720) if not is_portrait else (720, 1280)
+            return default
+
+    # Find best matching resolution
+    # Strategy: Find the largest resolution that fits within screen dimensions
+    best_resolution = None
+    best_score = -1
+
+    for res_width, res_height in available_resolutions:
+        # Resolution must fit within screen dimensions
+        if res_width <= screen_width and res_height <= screen_height:
+            # Score based on area coverage (prefer larger resolutions)
+            score = res_width * res_height
+
+            if score > best_score:
+                best_score = score
+                best_resolution = (res_width, res_height)
+
+    # Fallback if no resolution fits within screen
+    if best_resolution is None:
+        # Use smallest available resolution
+        best_resolution = min(available_resolutions, key=lambda r: r[0] * r[1])
+        logger.warning(
+            f"No standard resolution fits screen {screen_width}x{screen_height}, "
+            f"using {best_resolution[0]}x{best_resolution[1]}"
+        )
+    else:
+        logger.info(
+            f"Selected resolution {best_resolution[0]}x{best_resolution[1]} "
+            f"for screen {screen_width}x{screen_height} "
+            f"({'portrait' if is_portrait else 'landscape'})"
+        )
+
+    return best_resolution
+
+
 @dataclass
 class XvfbDisplay:
     """Represents an Xvfb virtual display"""
@@ -60,8 +184,8 @@ class XvfbManager:
         self.displays: dict[int, XvfbDisplay] = {}
         self.lock = asyncio.Lock()
 
-    async def allocate_display(self) -> Optional[int]:
-        """Allocate an available Xvfb display"""
+    async def allocate_display(self, width: int = 1280, height: int = 720) -> Optional[int]:
+        """Allocate an available Xvfb display with specified resolution"""
         async with self.lock:
             # Try to reuse existing unused display
             for display_num, display in self.displays.items():
@@ -75,12 +199,12 @@ class XvfbManager:
                 display_num = self.start_display + len(self.displays)
 
                 try:
-                    # Start Xvfb with 720p resolution
+                    # Start Xvfb with specified resolution
                     process = subprocess.Popen(
                         [
                             "Xvfb",
                             f":{display_num}",
-                            "-screen", "0", "1280x720x24",
+                            "-screen", "0", f"{width}x{height}x24",
                             "-ac",  # Disable access control
                             "-nolisten", "tcp",
                             "+extension", "GLX",
@@ -105,7 +229,7 @@ class XvfbManager:
                     )
                     self.displays[display_num] = display
 
-                    logger.info(f"Created new Xvfb display :{display_num}")
+                    logger.info(f"Created new Xvfb display :{display_num} with resolution {width}x{height}")
                     return display_num
 
                 except Exception as e:
@@ -139,24 +263,24 @@ class XvfbManager:
 class RetroArchMediaSource:
     """Captures RetroArch video/audio using FFmpeg"""
 
-    def __init__(self, display_num: int, session_id: str):
+    def __init__(self, display_num: int, session_id: str, width: int = 1280, height: int = 720):
         self.display_num = display_num
         self.session_id = session_id
+        self.width = width
+        self.height = height
         self.player: Optional[MediaPlayer] = None
 
     async def start(self):
         """Start FFmpeg capture"""
         try:
-            # FFmpeg command to capture X11 display and PulseAudio
-            # Note: We use MediaPlayer from aiortc which wraps FFmpeg
+            # FFmpeg command to capture X11 display with PipeWire audio
             options = {
                 "framerate": "30",
-                "video_size": "1280x720",
+                "video_size": f"{self.width}x{self.height}",
                 "thread_queue_size": "512",
             }
 
-            # Create media player with X11grab (video) and pulse (audio)
-            # Format: display:DISPLAY+x_offset,y_offset
+            # Video source: X11grab
             video_source = f":{self.display_num}.0+0,0"
 
             self.player = MediaPlayer(
@@ -165,7 +289,7 @@ class RetroArchMediaSource:
                 options=options,
             )
 
-            logger.info(f"Started FFmpeg capture for session {self.session_id} on display :{self.display_num}")
+            logger.info(f"Started FFmpeg capture for session {self.session_id} on display :{self.display_num} ({self.width}x{self.height})")
 
         except Exception as e:
             logger.error(f"Failed to start FFmpeg capture: {e}")
@@ -199,6 +323,8 @@ class RetroArchInstance:
         save_path: Optional[str] = None,
         state_path: Optional[str] = None,
         display_num: int = 99,
+        width: int = 1280,
+        height: int = 720,
     ):
         self.session_id = session_id
         self.rom_path = rom_path
@@ -206,6 +332,8 @@ class RetroArchInstance:
         self.save_path = save_path
         self.state_path = state_path
         self.display_num = display_num
+        self.width = width
+        self.height = height
 
         self.retroarch_process: Optional[subprocess.Popen] = None
         self.media_source: Optional[RetroArchMediaSource] = None
@@ -221,6 +349,7 @@ class RetroArchInstance:
                 "-v",  # Verbose
                 "--config", "/etc/retroarch.cfg",
                 "-L", f"/usr/lib/libretro/{self.core}_libretro.so",
+                "--fullscreen",  # Enable fullscreen mode
                 self.rom_path,
             ]
 
@@ -258,7 +387,12 @@ class RetroArchInstance:
     async def start_streaming(self):
         """Start FFmpeg capture and prepare for WebRTC"""
         try:
-            self.media_source = RetroArchMediaSource(self.display_num, self.session_id)
+            self.media_source = RetroArchMediaSource(
+                self.display_num,
+                self.session_id,
+                self.width,
+                self.height
+            )
             await self.media_source.start()
             logger.info(f"Started streaming for session {self.session_id}")
             return True
@@ -309,18 +443,32 @@ class RetroArchInstance:
             logger.error(f"Failed to set WebRTC answer: {e}")
             return False
 
-    async def send_input(self, key_code: str, event_type: str):
+    async def send_input(self, event_data: dict):
         """Send input to RetroArch via network commands"""
         try:
             # RetroArch network command port (from config)
             port = 55355
 
+            event_type = event_data.get("type", "")
+
             # Build RetroArch network command
             # Format: COMMAND arg1 arg2...
             if event_type == "keydown":
+                key_code = event_data.get("code", "")
                 command = f"KEYBOARD_PRESS {key_code}\n"
             elif event_type == "keyup":
+                key_code = event_data.get("code", "")
                 command = f"KEYBOARD_RELEASE {key_code}\n"
+            elif event_type == "mousemove":
+                x = event_data.get("x", 0)
+                y = event_data.get("y", 0)
+                command = f"MOUSE_MOVE {x} {y}\n"
+            elif event_type == "mousedown":
+                button = event_data.get("button", 0)
+                command = f"MOUSE_BUTTON_PRESS {button}\n"
+            elif event_type == "mouseup":
+                button = event_data.get("button", 0)
+                command = f"MOUSE_BUTTON_RELEASE {button}\n"
             else:
                 logger.warning(f"Unknown input event type: {event_type}")
                 return
@@ -463,10 +611,7 @@ class RetroArchDaemon:
                     if input_data:
                         try:
                             event = json.loads(input_data)
-                            await instance.send_input(
-                                event.get("code", ""),
-                                event.get("type", "")
-                            )
+                            await instance.send_input(event)
                         except (json.JSONDecodeError, KeyError) as e:
                             logger.error(f"Invalid input event: {e}")
 
@@ -496,8 +641,33 @@ class RetroArchDaemon:
 
             logger.info(f"Using ROM path: {rom_path}")
 
-            # Allocate Xvfb display
-            display_num = await self.xvfb_manager.allocate_display()
+            # Get screen dimensions from Redis
+            dims_key = f"retroarch:screen_dims:{session.session_id}"
+            dims_data = await async_cache.get(dims_key)
+            screen_width = 1920
+            screen_height = 1080
+
+            if dims_data:
+                try:
+                    dims = json.loads(dims_data)
+                    screen_width = dims.get("width", 1920)
+                    screen_height = dims.get("height", 1080)
+                    logger.info(f"Retrieved screen dimensions: {screen_width}x{screen_height}")
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Failed to parse screen dimensions: {e}, using default")
+
+            # Get max resolution from environment variable
+            max_resolution = os.getenv("RETROARCH_MAX_RESOLUTION")
+
+            # Calculate optimal resolution
+            xvfb_width, xvfb_height = calculate_optimal_resolution(
+                screen_width,
+                screen_height,
+                max_resolution
+            )
+
+            # Allocate Xvfb display with calculated resolution
+            display_num = await self.xvfb_manager.allocate_display(xvfb_width, xvfb_height)
             if display_num is None:
                 logger.error(f"Failed to allocate display for session {session.session_id}")
                 await retroarch_handler.update_session_state(
@@ -513,6 +683,8 @@ class RetroArchDaemon:
                 save_path=None,  # TODO: Build save path from session.save_id
                 state_path=None,  # TODO: Build state path from session.state_id
                 display_num=display_num,
+                width=xvfb_width,
+                height=xvfb_height,
             )
 
             # Start RetroArch
