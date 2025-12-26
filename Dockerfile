@@ -37,6 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
     libsdl2-2.0-0 \
+    pipewire \
+    wireplumber \
+    pipewire-pulse \
+    pipewire-audio-client-libraries \
     unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
