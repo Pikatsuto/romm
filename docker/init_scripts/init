@@ -237,7 +237,14 @@ start_bin_retroarch_daemon() {
 		return 0
 	fi
 
-	PYTHONPATH="/backend:${PYTHONPATH-}" python3 /backend/services/retroarch_daemon.py &
+	# Detect backend path based on environment
+	if [[ ${DEV_MODE} == "true" ]]; then
+		BACKEND_PATH="/app/backend"
+	else
+		BACKEND_PATH="/backend"
+	fi
+
+	PYTHONPATH="${BACKEND_PATH}:${PYTHONPATH-}" python3 ${BACKEND_PATH}/services/retroarch_daemon.py &
 	RETROARCH_DAEMON_PID=$!
 	echo "${RETROARCH_DAEMON_PID}" >/tmp/retroarch_daemon.pid
 }
@@ -281,7 +288,11 @@ shutdown() {
 }
 
 # switch to backend directory
-cd /backend || { error_log "/backend directory doesn't seem to exist"; }
+if [[ ${DEV_MODE} == "true" ]]; then
+	cd /app/backend || { error_log "/app/backend directory doesn't seem to exist"; }
+else
+	cd /backend || { error_log "/backend directory doesn't seem to exist"; }
+fi
 
 print_banner
 

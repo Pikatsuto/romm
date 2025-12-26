@@ -34,8 +34,8 @@ from aiortc import (
 from aiortc.contrib.media import MediaPlayer
 from av import AudioFrame, VideoFrame
 
-from config import config_manager
-from handler import retroarch_handler
+from config.config_manager import config_manager
+from handler.retroarch_handler import retroarch_handler, RetroArchSession, SessionState
 from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
 from models.rom import Rom
@@ -421,7 +421,7 @@ class RetroArchDaemon:
                 for session in sessions:
                     if (
                         session.session_id not in self.instances
-                        and session.state == retroarch_handler.SessionState.STARTING
+                        and session.state == SessionState.STARTING
                     ):
                         # Start new session
                         await self._start_session(session)
@@ -476,7 +476,7 @@ class RetroArchDaemon:
                 logger.error(f"Error handling pubsub events: {e}")
                 await asyncio.sleep(1)
 
-    async def _start_session(self, session: retroarch_handler.RetroArchSession):
+    async def _start_session(self, session: RetroArchSession):
         """Start a new RetroArch streaming session"""
         try:
             logger.info(f"Starting session {session.session_id}")
@@ -486,7 +486,7 @@ class RetroArchDaemon:
             if not rom:
                 logger.error(f"ROM {session.rom_id} not found for session {session.session_id}")
                 await retroarch_handler.update_session_state(
-                    session.session_id, retroarch_handler.SessionState.ERROR
+                    session.session_id, SessionState.ERROR
                 )
                 return
 
@@ -501,7 +501,7 @@ class RetroArchDaemon:
             if display_num is None:
                 logger.error(f"Failed to allocate display for session {session.session_id}")
                 await retroarch_handler.update_session_state(
-                    session.session_id, retroarch_handler.SessionState.ERROR
+                    session.session_id, SessionState.ERROR
                 )
                 return
 
@@ -520,7 +520,7 @@ class RetroArchDaemon:
                 logger.error(f"Failed to start RetroArch for session {session.session_id}")
                 await self.xvfb_manager.release_display(display_num)
                 await retroarch_handler.update_session_state(
-                    session.session_id, retroarch_handler.SessionState.ERROR
+                    session.session_id, SessionState.ERROR
                 )
                 return
 
@@ -530,7 +530,7 @@ class RetroArchDaemon:
                 await instance.stop()
                 await self.xvfb_manager.release_display(display_num)
                 await retroarch_handler.update_session_state(
-                    session.session_id, retroarch_handler.SessionState.ERROR
+                    session.session_id, SessionState.ERROR
                 )
                 return
 
@@ -541,7 +541,7 @@ class RetroArchDaemon:
                 await instance.stop()
                 await self.xvfb_manager.release_display(display_num)
                 await retroarch_handler.update_session_state(
-                    session.session_id, retroarch_handler.SessionState.ERROR
+                    session.session_id, SessionState.ERROR
                 )
                 return
 
@@ -550,7 +550,7 @@ class RetroArchDaemon:
 
             # Update session in Redis with WebRTC offer and running state
             session.webrtc_offer = offer_sdp
-            session.state = retroarch_handler.SessionState.RUNNING
+            session.state = SessionState.RUNNING
             session.pid = instance.retroarch_process.pid if instance.retroarch_process else None
             session.xvfb_display = display_num
             await retroarch_handler.set_session(session)
@@ -560,7 +560,7 @@ class RetroArchDaemon:
         except Exception as e:
             logger.error(f"Failed to start session {session.session_id}: {e}")
             await retroarch_handler.update_session_state(
-                session.session_id, retroarch_handler.SessionState.ERROR
+                session.session_id, SessionState.ERROR
             )
 
     async def _stop_session(self, session_id: str):
@@ -583,7 +583,7 @@ class RetroArchDaemon:
 
             # Update session in Redis
             await retroarch_handler.update_session_state(
-                session_id, retroarch_handler.SessionState.STOPPED
+                session_id, SessionState.STOPPED
             )
 
             logger.info(f"Session {session_id} stopped")

@@ -77,6 +77,12 @@ watchfiles \
 	'uv run python watcher.py' \
 	/app/romm/library &
 
+# Start RetroArch streaming daemon if enabled
+if [[ ${RETROARCH_ENABLED} == "true" ]]; then
+	echo "Starting RetroArch streaming daemon..."
+	PYTHONPATH="/app/backend:${PYTHONPATH-}" python3 /app/backend/services/retroarch_daemon.py &
+fi
+
 # Start the frontend dev server
 cd /app/frontend
 npm run dev &
