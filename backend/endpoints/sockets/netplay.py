@@ -222,3 +222,62 @@ async def snapshot(sid: str, data: Any):
 @netplay_socket_handler.socket_server.on("input")  # type: ignore
 async def input(sid: str, data: Any):
     await _broadcast_to_room(sid, "input", data)
+
+
+# RetroArch streaming events
+
+
+@netplay_socket_handler.socket_server.on("retroarch-ice-candidate")  # type: ignore
+async def retroarch_ice_candidate(sid: str, data: dict):
+    """Handle ICE candidate exchange for RetroArch WebRTC streaming.
+
+    This event is emitted by the frontend to exchange ICE candidates
+    for establishing the WebRTC connection with the RetroArch daemon.
+
+    Args:
+        sid: Socket ID of the sender
+        data: Contains session_id and candidate information
+    """
+    from decorators.cache import cache
+
+    session_id = data.get("session_id")
+    candidate = data.get("candidate")
+
+    if not session_id or not candidate:
+        return
+
+    # Publish to Redis for daemon to consume
+    import json
+
+    await cache.publish(
+        f"retroarch:ice:{session_id}",
+        json.dumps({"sid": sid, "candidate": candidate}),
+    )
+
+
+@netplay_socket_handler.socket_server.on("retroarch-input")  # type: ignore
+async def retroarch_input(sid: str, data: dict):
+    """Handle input events for RetroArch streaming sessions.
+
+    This event forwards keyboard, mouse, and gamepad inputs
+    to the RetroArch daemon for processing.
+
+    Args:
+        sid: Socket ID of the sender
+        data: Contains session_id and input event information
+    """
+    from decorators.cache import cache
+
+    session_id = data.get("session_id")
+    input_event = data.get("event")
+
+    if not session_id or not input_event:
+        return
+
+    # Publish to Redis for daemon to consume
+    import json
+
+    await cache.publish(
+        f"retroarch:input:{session_id}",
+        json.dumps(input_event),
+    )
