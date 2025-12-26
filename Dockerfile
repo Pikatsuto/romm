@@ -30,6 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblzma-dev \
     libncurses5-dev \
     libncursesw5-dev \
+    xvfb \
+    retroarch \
+    ffmpeg \
+    netcat-openbsd \
+    libgl1-mesa-dri \
+    libgl1-mesa-glx \
+    libsdl2-2.0-0 \
+    unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -53,6 +61,17 @@ RUN sed -i '22a #include <ctime>' ./src/Util.h \
     && make HAVE_CHD=1 -f ./Makefile.RAHasher \
     && cp ./bin64/RAHasher /usr/bin/RAHasher
 RUN rm -rf /tmp/RALibretro
+
+# Download RetroArch cores for development
+RUN mkdir -p /usr/lib/libretro && \
+    cd /tmp && \
+    for core in melonds desmume mgba snes9x genesis_plus_gx fceumm gambatte nestopia mesen; do \
+        echo "Downloading ${core}_libretro.so..."; \
+        curl -L -o "${core}_libretro.so.zip" "http://buildbot.libretro.com/nightly/linux/x86_64/latest/${core}_libretro.so.zip" 2>/dev/null && \
+        unzip -o "${core}_libretro.so.zip" -d /usr/lib/libretro/ 2>/dev/null && \
+        rm -f "${core}_libretro.so.zip" || echo "Failed to download ${core}, skipping..."; \
+    done && \
+    ls -lh /usr/lib/libretro/
 
 # Install frontend dependencies
 COPY frontend/package.json /app/frontend/
