@@ -35,6 +35,7 @@ from endpoints import (
     netplay,
     platform,
     raw,
+    retroarch,
     rom,
     saves,
     screenshots,
@@ -137,6 +138,7 @@ app.include_router(firmware.router, prefix="/api")
 app.include_router(collections.router, prefix="/api")
 app.include_router(gamelist.router, prefix="/api")
 app.include_router(netplay.router, prefix="/api")
+app.include_router(retroarch.router, prefix="/api")
 
 app.mount("/ws", socket_handler.socket_app)
 app.mount("/netplay", netplay_socket_handler.socket_app)
