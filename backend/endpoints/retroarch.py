@@ -149,14 +149,45 @@ async def start_stream(
 
     await retroarch_handler.set_session(session)
 
-    # TODO: Signal daemon via Redis pubsub to start RetroArch process
-    # The daemon will update the session with PID, Xvfb display, and WebRTC offer
-    # For now, return a placeholder offer
-    webrtc_offer = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+    # Wait for daemon to start RetroArch and generate WebRTC offer
+    # Poll the session for up to 30 seconds
+    import asyncio
+    max_wait = 30  # seconds
+    poll_interval = 0.5  # seconds
+    elapsed = 0
 
-    return StartSessionResponse(
-        session_id=session_id,
-        webrtc_offer=webrtc_offer,
+    while elapsed < max_wait:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+
+        # Refresh session from Redis
+        updated_session = await retroarch_handler.get_session(session_id)
+        if not updated_session:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Session was deleted unexpectedly",
+            )
+
+        # Check if daemon has generated the offer
+        if updated_session.webrtc_offer and updated_session.state == SessionState.RUNNING:
+            log.info(f"Session {session_id} is ready with WebRTC offer")
+            return StartSessionResponse(
+                session_id=session_id,
+                webrtc_offer=updated_session.webrtc_offer,
+            )
+
+        # Check for error state
+        if updated_session.state == SessionState.ERROR:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="RetroArch daemon failed to start the session. Check daemon logs for details.",
+            )
+
+    # Timeout - daemon didn't respond in time
+    await retroarch_handler.delete_session(session_id)
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail="RetroArch daemon did not respond in time. Please ensure the daemon is running.",
     )
 
 
