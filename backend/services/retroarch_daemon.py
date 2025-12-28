@@ -43,6 +43,40 @@ from models.rom import Rom
 logger = logging.getLogger(__name__)
 
 
+# Touchscreen region configuration per core
+# Format: (x_offset, y_offset, width_ratio, height_ratio, native_width, native_height, y_offset_native)
+# Values are ratios of total screen size (0.0 to 1.0) + native resolution
+TOUCHSCREEN_REGIONS = {
+    # Nintendo DS cores - dual screen 256x192 each (4:3 aspect ratio)
+    # Native touchscreen: 256x192, positioned below top screen (y_offset = 192)
+    "desmume": {
+        # Vertical: bottom half, centered 4:3 screen
+        "vertical": (0.3125, 0.5, 0.375, 0.5, 256, 192, 192),
+        # Horizontal: right half, centered 4:3 screen
+        "horizontal": (0.5, 0.3125, 0.5, 0.375, 256, 192, 192),
+        "native_total_height": 384,  # Both screens: 192 + 192
+    },
+    "melonds": {
+        "vertical": (0.3125, 0.5, 0.375, 0.5, 256, 192, 192),
+        "horizontal": (0.5, 0.3125, 0.5, 0.375, 256, 192, 192),
+        "native_total_height": 384,
+    },
+    # Nintendo 3DS - different screen sizes
+    # Top: 400x240, Bottom: 320x240 (touchscreen)
+    "citra": {
+        "vertical": (0.3125, 0.5, 0.375, 0.5, 320, 240, 240),
+        "horizontal": (0.5, 0.3125, 0.5, 0.375, 320, 240, 240),
+        "native_total_height": 480,  # 240 + 240
+    },
+    # Wii U gamepad - 854x480 touchscreen
+    "cemu": {
+        "vertical": (0.0, 0.0, 1.0, 1.0, 854, 480, 0),
+        "horizontal": (0.0, 0.0, 1.0, 1.0, 854, 480, 0),
+        "native_total_height": 480,
+    },
+}
+
+
 # Standard resolutions (landscape format)
 # Will be automatically rotated for portrait orientation
 STANDARD_RESOLUTIONS = [
@@ -273,7 +307,8 @@ class RetroArchMediaSource:
     async def start(self):
         """Start FFmpeg capture"""
         try:
-            # FFmpeg command to capture X11 display with PipeWire audio
+            # FFmpeg command to capture X11 display
+            # TODO: Add PipeWire/PulseAudio audio capture
             options = {
                 "framerate": "30",
                 "video_size": f"{self.width}x{self.height}",
@@ -289,7 +324,10 @@ class RetroArchMediaSource:
                 options=options,
             )
 
-            logger.info(f"Started FFmpeg capture for session {self.session_id} on display :{self.display_num} ({self.width}x{self.height})")
+            logger.info(
+                f"Started FFmpeg capture for session {self.session_id} "
+                f"on display :{self.display_num} ({self.width}x{self.height})"
+            )
 
         except Exception as e:
             logger.error(f"Failed to start FFmpeg capture: {e}")
@@ -340,26 +378,50 @@ class RetroArchInstance:
         self.peer_connection: Optional[RTCPeerConnection] = None
         self.last_activity = datetime.now()
 
+        # Calculate touchscreen region if core supports it
+        self.touchscreen_region = self._calculate_touchscreen_region()
+
     async def start_retroarch(self):
         """Launch RetroArch process"""
         try:
+            # Set environment for Xvfb display
+            env = os.environ.copy()
+            env["DISPLAY"] = f":{self.display_num}"
+
+            # Create persistent directory for RetroArch config
+            config_dir = Path("/tmp/retroarch_config")
+            config_dir.mkdir(exist_ok=True)
+
+            # Path for core options file (persistent across sessions)
+            core_options_path = config_dir / "retroarch-core-options.cfg"
+
+            # Create temporary config file
+            config_path = f"/tmp/retroarch_{self.session_id}.cfg"
+            with open(config_path, "w") as f:
+                # Include base config and enable network commands
+                f.write('#include "/etc/retroarch.cfg"\n')
+                f.write("input_auto_mouse_grab = \"false\"\n")
+                f.write("input_overlay_show_mouse_cursor = \"false\"\n")
+
+                # Force core options to be saved to persistent location
+                f.write(f'core_options_path = "{core_options_path}"\n')
+                f.write("game_specific_options = \"false\"\n")  # Use global core options file
+                f.write("auto_overrides_enable = \"false\"\n")  # Disable per-game overrides
+                f.write("auto_remaps_enable = \"false\"\n")  # Disable per-game remaps
+
             # Build RetroArch command
             cmd = [
                 "retroarch",
                 "-v",  # Verbose
-                "--config", "/etc/retroarch.cfg",
+                "--config", config_path,
                 "-L", f"/usr/lib/libretro/{self.core}_libretro.so",
-                "--fullscreen",  # Enable fullscreen mode
+                "--fullscreen",
                 self.rom_path,
             ]
 
             # Load save state if provided
             if self.state_path:
                 cmd.extend(["-e", "1", "-s", self.state_path])
-
-            # Set environment for Xvfb display
-            env = os.environ.copy()
-            env["DISPLAY"] = f":{self.display_num}"
 
             # Start RetroArch
             self.retroarch_process = subprocess.Popen(
@@ -373,11 +435,33 @@ class RetroArchInstance:
             await asyncio.sleep(2)
 
             if self.retroarch_process.poll() is not None:
-                stdout, stderr = self.retroarch_process.communicate()
+                _, stderr = self.retroarch_process.communicate()
                 logger.error(f"RetroArch failed to start: {stderr.decode()}")
+                # Cleanup temp config
+                try:
+                    os.remove(config_path)
+                except:
+                    pass
                 return False
 
             logger.info(f"Started RetroArch for session {self.session_id} (PID: {self.retroarch_process.pid})")
+
+            # Wait for core options file to be created by RetroArch
+            # RetroArch generates this file when loading a core
+            core_options_path = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
+            timeout = 10  # seconds
+            elapsed = 0
+            check_interval = 0.1  # Check every 100ms
+
+            while not core_options_path.exists() and elapsed < timeout:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+            if core_options_path.exists():
+                logger.info(f"Core options file created after {elapsed:.1f}s")
+            else:
+                logger.warning(f"Core options file not created after {timeout}s timeout")
+
             return True
 
         except Exception as e:
@@ -443,49 +527,234 @@ class RetroArchInstance:
             logger.error(f"Failed to set WebRTC answer: {e}")
             return False
 
-    async def send_input(self, event_data: dict):
-        """Send input to RetroArch via network commands"""
+    async def _send_retroarch_command(self, command: str, read_response: bool = False) -> Optional[str]:
+        """Send command to RetroArch via network command interface"""
         try:
-            # RetroArch network command port (from config)
-            port = 55355
+            # Send TCP command to RetroArch on localhost:55355
+            reader, writer = await asyncio.open_connection('127.0.0.1', 55355)
+            writer.write(f"{command}\n".encode())
+            await writer.drain()
 
+            response = None
+            if read_response:
+                # Read response with timeout
+                try:
+                    response = await asyncio.wait_for(reader.read(8192), timeout=1.0)
+                    response = response.decode('utf-8').strip()
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout reading response for command '{command}'")
+
+            writer.close()
+            await writer.wait_closed()
+            return response
+        except Exception as e:
+            logger.error(f"Failed to send RetroArch command '{command}': {e}")
+            return None
+
+    async def get_core_options(self) -> dict:
+        """Retrieve core options from RetroArch core options file"""
+        try:
+            # Try multiple possible locations for retroarch-core-options.cfg
+            # Priority: our persistent file first, then standard locations
+            possible_paths = [
+                Path("/tmp/retroarch_config/retroarch-core-options.cfg"),  # Our persistent location
+                Path.home() / ".config" / "retroarch" / "retroarch-core-options.cfg",
+                Path("/root/.config/retroarch/retroarch-core-options.cfg"),
+                Path("/storage/.config/retroarch/retroarch-core-options.cfg"),  # Batocera
+                Path("/userdata/system/configs/retroarch/cores/retroarch-core-options.cfg"),  # Batocera alt
+            ]
+
+            config_path = None
+            for path in possible_paths:
+                if path.exists():
+                    config_path = path
+                    logger.info(f"Found core options file at: {config_path}")
+                    break
+
+            if not config_path:
+                logger.warning(f"Core options file not found. Tried: {[str(p) for p in possible_paths]}")
+                return {}
+
+            core_options = {}
+
+            # Extract core name without "ra-" prefix for matching
+            core_name = self.core.lower().replace('ra-', '') if self.core else ""
+            logger.info(f"Looking for core options prefixed with: {core_name}")
+
+            # Read the core options file
+            with open(config_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+
+                    # Format: option_name = "value"
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+
+                        # Remove quotes from value
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+
+                        # Only include options for the current core
+                        # Core options are prefixed with core name (e.g., "melonds_console_mode")
+                        if core_name and key.lower().startswith(core_name + '_'):
+                            core_options[key] = value
+                            logger.debug(f"Found core option: {key} = {value}")
+
+            logger.info(f"Retrieved {len(core_options)} core options for core {self.core} from {config_path}")
+            return core_options
+
+        except Exception as e:
+            logger.error(f"Failed to get core options: {e}", exc_info=True)
+            return {}
+
+    async def send_input(self, event_data: dict):
+        """Send input to RetroArch via network command API or xdotool"""
+        try:
             event_type = event_data.get("type", "")
 
-            # Build RetroArch network command
-            # Format: COMMAND arg1 arg2...
+            # Set DISPLAY environment for xdotool
+            env = os.environ.copy()
+            env["DISPLAY"] = f":{self.display_num}"
+
+            # Use xdotool for keyboard, network API for mouse
             if event_type == "keydown":
-                key_code = event_data.get("code", "")
-                command = f"KEYBOARD_PRESS {key_code}\n"
+                key = event_data.get("key", "")
+                # Map JavaScript key names to X11 key names
+                x11_key = self._map_key_to_x11(key)
+                if x11_key:
+                    proc = await asyncio.create_subprocess_exec(
+                        "xdotool", "keydown", x11_key,
+                        env=env,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc.wait()
+
             elif event_type == "keyup":
-                key_code = event_data.get("code", "")
-                command = f"KEYBOARD_RELEASE {key_code}\n"
+                key = event_data.get("key", "")
+                x11_key = self._map_key_to_x11(key)
+                if x11_key:
+                    proc = await asyncio.create_subprocess_exec(
+                        "xdotool", "keyup", x11_key,
+                        env=env,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc.wait()
+
             elif event_type == "mousemove":
-                x = event_data.get("x", 0)
-                y = event_data.get("y", 0)
-                command = f"MOUSE_MOVE {x} {y}\n"
+                try:
+                    # Frontend sends normalized coordinates (0-1) relative to touchscreen zone
+                    x = event_data.get("x", 0)
+                    y = event_data.get("y", 0)
+
+                    # If touchscreen region defined, map to that region
+                    if self.touchscreen_region:
+                        x_offset, y_offset, width_ratio, height_ratio = self.touchscreen_region[:4]
+
+                        # Map normalized coords to touchscreen region in Xvfb
+                        xvfb_x = int((x_offset + x * width_ratio) * self.width)
+                        xvfb_y = int((y_offset + y * height_ratio) * self.height)
+                    else:
+                        # Full screen mapping
+                        xvfb_x = int(x * self.width)
+                        xvfb_y = int(y * self.height)
+
+                    # Clamp to bounds
+                    xvfb_x = max(0, min(self.width - 1, xvfb_x))
+                    xvfb_y = max(0, min(self.height - 1, xvfb_y))
+
+                    # Move mouse with xdotool (fire and forget - no wait)
+                    asyncio.create_task(
+                        asyncio.create_subprocess_exec(
+                            "xdotool", "mousemove", str(xvfb_x), str(xvfb_y),
+                            env=env,
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL,
+                        )
+                    )
+                except Exception as e:
+                    # Silent fail - don't log to avoid spam
+                    pass
+
             elif event_type == "mousedown":
                 button = event_data.get("button", 0)
-                command = f"MOUSE_BUTTON_PRESS {button}\n"
+                # Mouse buttons: 1=left, 2=middle, 3=right
+                xdotool_button = button + 1
+                proc = await asyncio.create_subprocess_exec(
+                    "xdotool", "mousedown", str(xdotool_button),
+                    env=env,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+
             elif event_type == "mouseup":
                 button = event_data.get("button", 0)
-                command = f"MOUSE_BUTTON_RELEASE {button}\n"
+                xdotool_button = button + 1
+                proc = await asyncio.create_subprocess_exec(
+                    "xdotool", "mouseup", str(xdotool_button),
+                    env=env,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
             else:
                 logger.warning(f"Unknown input event type: {event_type}")
                 return
-
-            # Send to RetroArch via UDP
-            proc = await asyncio.create_subprocess_exec(
-                "sh", "-c",
-                f"echo '{command}' | nc -u -w 0 localhost {port}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
 
             self.last_activity = datetime.now()
 
         except Exception as e:
             logger.error(f"Failed to send input: {e}")
+
+    def _calculate_touchscreen_region(self) -> Optional[tuple[float, float, float, float]]:
+        """Calculate touchscreen region for cores with dual screens (DS, 3DS)
+
+        Returns:
+            Tuple of (x_offset_ratio, y_offset_ratio, width_ratio, height_ratio) or None
+        """
+        if self.core not in TOUCHSCREEN_REGIONS:
+            return None
+
+        # DS/3DS always display vertically (stacked screens)
+        orientation = "vertical"
+
+        region = TOUCHSCREEN_REGIONS[self.core].get(orientation)
+        if region:
+            logger.info(
+                f"Touchscreen region for {self.core} ({orientation}): "
+                f"x={region[0]:.1%}, y={region[1]:.1%}, w={region[2]:.1%}, h={region[3]:.1%}"
+            )
+        return region
+
+    def _map_key_to_x11(self, js_key: str) -> str:
+        """Map JavaScript key names to X11 key names for xdotool"""
+        # Common mappings
+        key_map = {
+            "ArrowUp": "Up",
+            "ArrowDown": "Down",
+            "ArrowLeft": "Left",
+            "ArrowRight": "Right",
+            " ": "space",
+            "Enter": "Return",
+            "Escape": "Escape",
+            "Backspace": "BackSpace",
+            "Tab": "Tab",
+            "Shift": "Shift_L",
+            "Control": "Control_L",
+            "Alt": "Alt_L",
+            "Meta": "Super_L",
+        }
+
+        # Return mapped key or original if single character
+        return key_map.get(js_key, js_key.lower())
 
     async def stop(self):
         """Stop RetroArch instance and cleanup"""
@@ -507,6 +776,14 @@ class RetroArchInstance:
             except subprocess.TimeoutExpired:
                 self.retroarch_process.kill()
             logger.info(f"Terminated RetroArch process for session {self.session_id}")
+
+        # Cleanup temporary config file
+        config_path = f"/tmp/retroarch_{self.session_id}.cfg"
+        try:
+            if os.path.exists(config_path):
+                os.remove(config_path)
+        except Exception as e:
+            logger.warning(f"Failed to remove temp config {config_path}: {e}")
 
 
 class RetroArchDaemon:
@@ -581,13 +858,12 @@ class RetroArchDaemon:
                 await asyncio.sleep(5)
 
     async def _handle_pubsub_events(self):
-        """Handle Redis pubsub events for WebRTC signaling, stop, and input"""
-        # Note: This is a simplified implementation
-        # In production, you would use actual Redis pubsub
-        # For now, we'll check Redis keys for these events
+        """Handle Redis pubsub events for WebRTC signaling, stop, input, and core options"""
+        # This loop handles WebRTC answers, stop signals, and core options requests
+        # Input events are handled via dedicated pubsub listeners per session
         while self.running:
             try:
-                # Check for WebRTC answers in Redis
+                # Check for WebRTC answers, stop signals, and core options requests
                 for session_id, instance in list(self.instances.items()):
                     # Check for WebRTC answer
                     answer_key = f"retroarch:webrtc_answer:{session_id}"
@@ -605,21 +881,54 @@ class RetroArchDaemon:
                         await self._stop_session(session_id)
                         await async_cache.delete(stop_key)
 
-                    # Check for input events
-                    input_key = f"retroarch:input:{session_id}"
-                    input_data = await async_cache.lpop(input_key)
-                    if input_data:
-                        try:
-                            event = json.loads(input_data)
-                            await instance.send_input(event)
-                        except (json.JSONDecodeError, KeyError) as e:
-                            logger.error(f"Invalid input event: {e}")
+                    # Check for core options request
+                    request_key = f"retroarch:get_core_options:{session_id}"
+                    request = await async_cache.get(request_key)
+                    if request:
+                        logger.info(f"Received core options request for session {session_id}")
+                        # Get core options from RetroArch
+                        core_options = await instance.get_core_options()
+                        # Store response in Redis
+                        response_key = f"retroarch:core_options:{session_id}"
+                        await async_cache.set(response_key, json.dumps(core_options), ex=10)
+                        # Delete request
+                        await async_cache.delete(request_key)
+                        logger.info(f"Sent {len(core_options)} core options for session {session_id}")
 
-                await asyncio.sleep(0.1)  # Poll faster for real-time events
+                await asyncio.sleep(0.5)  # Slower polling for non-critical events
 
             except Exception as e:
                 logger.error(f"Error handling pubsub events: {e}")
                 await asyncio.sleep(1)
+
+    async def _listen_for_inputs(self, session_id: str, instance):
+        """Real-time pubsub listener for input events - NO POLLING DELAY"""
+        # Create a dedicated async pubsub connection
+        pubsub = async_cache.pubsub()
+        channel = f"retroarch:input:{session_id}"
+
+        try:
+            await pubsub.subscribe(channel)
+            logger.info(f"Listening for inputs on {channel}")
+
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        event = json.loads(message["data"])
+                        await instance.send_input(event)
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.error(f"Invalid input event: {e}")
+
+                # Check if session is still active
+                if session_id not in self.instances:
+                    logger.info(f"Session {session_id} ended, stopping input listener")
+                    break
+
+        except Exception as e:
+            logger.error(f"Error in input listener for {session_id}: {e}")
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
 
     async def _start_session(self, session: RetroArchSession):
         """Start a new RetroArch streaming session"""
@@ -719,6 +1028,27 @@ class RetroArchDaemon:
 
             # Store instance
             self.instances[session.session_id] = instance
+
+            # Start real-time input listener (pubsub - no polling delay)
+            asyncio.create_task(self._listen_for_inputs(session.session_id, instance))
+
+            # Store touchscreen region config in Redis for frontend
+            if instance.touchscreen_region:
+                region_key = f"retroarch:touchscreen_region:{session.session_id}"
+                region_data = {
+                    "x_offset": instance.touchscreen_region[0],
+                    "y_offset": instance.touchscreen_region[1],
+                    "width": instance.touchscreen_region[2],
+                    "height": instance.touchscreen_region[3],
+                }
+                await async_cache.set(region_key, json.dumps(region_data), ex=300)
+
+            # Load and store core options automatically for frontend
+            core_options = await instance.get_core_options()
+            if core_options:
+                options_key = f"retroarch:core_options:{session.session_id}"
+                await async_cache.set(options_key, json.dumps(core_options), ex=300)
+                logger.info(f"Stored {len(core_options)} core options for session {session.session_id}")
 
             # Update session in Redis with WebRTC offer and running state
             session.webrtc_offer = offer_sdp

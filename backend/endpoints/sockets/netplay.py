@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, NotRequired, TypedDict
 
 from endpoints.netplay import DEFAULT_MAX_PLAYERS
@@ -238,7 +239,7 @@ async def retroarch_ice_candidate(sid: str, data: dict):
         sid: Socket ID of the sender
         data: Contains session_id and candidate information
     """
-    from decorators.cache import cache
+    from handler.redis_handler import async_cache
 
     session_id = data.get("session_id")
     candidate = data.get("candidate")
@@ -249,7 +250,7 @@ async def retroarch_ice_candidate(sid: str, data: dict):
     # Publish to Redis for daemon to consume
     import json
 
-    await cache.publish(
+    await async_cache.publish(
         f"retroarch:ice:{session_id}",
         json.dumps({"sid": sid, "candidate": candidate}),
     )
@@ -266,7 +267,7 @@ async def retroarch_input(sid: str, data: dict):
         sid: Socket ID of the sender
         data: Contains session_id and input event information
     """
-    from decorators.cache import cache
+    from handler.redis_handler import async_cache
 
     session_id = data.get("session_id")
     input_event = data.get("event")
@@ -274,10 +275,65 @@ async def retroarch_input(sid: str, data: dict):
     if not session_id or not input_event:
         return
 
-    # Publish to Redis for daemon to consume
+    # Publish to Redis pubsub for real-time delivery to daemon
     import json
 
-    await cache.publish(
+    await async_cache.publish(
         f"retroarch:input:{session_id}",
         json.dumps(input_event),
+    )
+
+
+@netplay_socket_handler.socket_server.on("retroarch-get-core-options")  # type: ignore
+async def retroarch_get_core_options(sid: str, data: dict):
+    """Retrieve core options from RetroArch instance.
+
+    This event requests the currently available core options from the
+    running RetroArch instance via the network command API.
+
+    Args:
+        sid: Socket ID of the sender
+        data: Contains session_id
+
+    Returns:
+        Dict of core options {option_name: option_value}
+    """
+    from handler.redis_handler import async_cache
+    import json
+
+    session_id = data.get("session_id")
+
+    if not session_id:
+        await netplay_socket_handler.socket_server.emit(
+            "retroarch-core-options",
+            {"session_id": session_id, "options": {}},
+            to=sid,
+        )
+        return
+
+    # Request core options from daemon via Redis
+    request_key = f"retroarch:get_core_options:{session_id}"
+    response_key = f"retroarch:core_options:{session_id}"
+
+    # Set request flag
+    await async_cache.set(request_key, "1", ex=10)
+
+    # Wait for response (poll with timeout)
+    options = {}
+    for _ in range(20):  # Wait up to 2 seconds
+        await asyncio.sleep(0.1)
+        options_json = await async_cache.get(response_key)
+        if options_json:
+            try:
+                options = json.loads(options_json)
+                await async_cache.delete(response_key)
+                break
+            except json.JSONDecodeError:
+                pass
+
+    # Send response back to client
+    await netplay_socket_handler.socket_server.emit(
+        "retroarch-core-options",
+        {"session_id": session_id, "options": options},
+        to=sid,
     )
