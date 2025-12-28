@@ -38,6 +38,7 @@ from config.config_manager import config_manager
 from handler.retroarch_handler import retroarch_handler, RetroArchSession, SessionState
 from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
+from handler.socket_handler import netplay_socket_handler
 from models.rom import Rom
 
 logger = logging.getLogger(__name__)
@@ -395,6 +396,15 @@ class RetroArchInstance:
             # Path for core options file (persistent across sessions)
             core_options_path = config_dir / "retroarch-core-options.cfg"
 
+            # Copy pre-generated core options if available
+            pre_generated_config = Path("/app/romm/config/retroarch") / f"{self.core.lower()}-core-options.cfg"
+            if pre_generated_config.exists() and not core_options_path.exists():
+                logger.info(f"Copying pre-generated config for {self.core} from {pre_generated_config}")
+                import shutil
+                shutil.copy2(pre_generated_config, core_options_path)
+            elif not pre_generated_config.exists():
+                logger.info(f"No pre-generated config found for {self.core}, will be created on first run")
+
             # Create temporary config file
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
@@ -446,21 +456,8 @@ class RetroArchInstance:
 
             logger.info(f"Started RetroArch for session {self.session_id} (PID: {self.retroarch_process.pid})")
 
-            # Wait for core options file to be created by RetroArch
-            # RetroArch generates this file when loading a core
-            core_options_path = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
-            timeout = 10  # seconds
-            elapsed = 0
-            check_interval = 0.1  # Check every 100ms
-
-            while not core_options_path.exists() and elapsed < timeout:
-                await asyncio.sleep(check_interval)
-                elapsed += check_interval
-
-            if core_options_path.exists():
-                logger.info(f"Core options file created after {elapsed:.1f}s")
-            else:
-                logger.warning(f"Core options file not created after {timeout}s timeout")
+            # Don't block waiting for core options - let the watcher handle it asynchronously
+            logger.info(f"Core options will be loaded asynchronously for {self.core}")
 
             return True
 
@@ -714,6 +711,102 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to send input: {e}")
 
+    async def execute_command(self, command: str):
+        """Execute a RetroArch command.
+
+        Supported commands:
+        - SAVESTATE: Save state
+        - LOADSTATE: Load state
+        - RESET: Restart game
+        - SCREENSHOT: Take screenshot
+        - PAUSE_TOGGLE: Pause/Resume game
+        - SAVE_AND_QUIT: Save state and exit
+        """
+        try:
+            command_map = {
+                "SAVESTATE": "SAVESTATE",
+                "LOADSTATE": "LOADSTATE",
+                "RESET": "RESET",
+                "SCREENSHOT": "SCREENSHOT",
+                "PAUSE_TOGGLE": "PAUSE_TOGGLE",
+                "SAVE_AND_QUIT": "SAVESTATE",  # Will save then quit separately
+            }
+
+            retroarch_cmd = command_map.get(command)
+            if not retroarch_cmd:
+                logger.warning(f"Unknown command: {command}")
+                return
+
+            logger.info(f"Executing RetroArch command: {command}")
+            await self._send_retroarch_command(retroarch_cmd)
+
+            # Special handling for SAVE_AND_QUIT
+            if command == "SAVE_AND_QUIT":
+                await asyncio.sleep(0.5)  # Wait for save to complete
+                await self._send_retroarch_command("QUIT")
+
+            self.last_activity = datetime.now()
+
+        except Exception as e:
+            logger.error(f"Failed to execute command {command}: {e}")
+
+    async def set_core_option(self, option_name: str, option_value: str):
+        """Set a core option value in real-time.
+
+        This modifies the core options file and reloads it in RetroArch.
+
+        Args:
+            option_name: Name of the core option (e.g., "melonds_console_mode")
+            option_value: New value for the option
+        """
+        try:
+            config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
+
+            if not config_file.exists():
+                logger.warning(f"Core options file not found: {config_file}")
+                return
+
+            # Read current options
+            lines = []
+            option_found = False
+
+            with open(config_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # Check if this is the option we want to modify
+                    if '=' in line:
+                        key = line.split('=', 1)[0].strip()
+                        if key == option_name:
+                            # Replace with new value
+                            lines.append(f'{option_name} = "{option_value}"\n')
+                            option_found = True
+                            continue
+                    lines.append(line)
+
+            # If option not found, add it
+            if not option_found:
+                lines.append(f'{option_name} = "{option_value}"\n')
+
+            # Write back to file
+            with open(config_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+
+            logger.info(f"Updated core option: {option_name} = {option_value}")
+
+            # Reload core options in RetroArch
+            await self._send_retroarch_command("CORE_OPTION_RELOAD")
+
+            # Update backup file as well
+            backup_path = Path("/app/romm/config/retroarch") / f"{self.core.lower()}-core-options.cfg"
+            if backup_path.exists():
+                import shutil
+                shutil.copy2(config_file, backup_path)
+                logger.info(f"Updated backup at {backup_path}")
+
+            self.last_activity = datetime.now()
+
+        except Exception as e:
+            logger.error(f"Failed to set core option {option_name}: {e}")
+
     def _calculate_touchscreen_region(self) -> Optional[tuple[float, float, float, float]]:
         """Calculate touchscreen region for cores with dual screens (DS, 3DS)
 
@@ -930,6 +1023,257 @@ class RetroArchDaemon:
             await pubsub.unsubscribe(channel)
             await pubsub.close()
 
+    async def _listen_for_commands(self, session_id: str, instance):
+        """Real-time pubsub listener for RetroArch commands"""
+        pubsub = async_cache.pubsub()
+        command_channel = f"retroarch:command:{session_id}"
+        option_channel = f"retroarch:set_option:{session_id}"
+
+        try:
+            await pubsub.subscribe(command_channel, option_channel)
+            logger.info(f"Listening for commands on {command_channel} and {option_channel}")
+
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        channel = message["channel"].decode("utf-8")
+                        data = json.loads(message["data"])
+
+                        if channel == command_channel:
+                            command = data.get("command")
+                            if command:
+                                await instance.execute_command(command)
+                        elif channel == option_channel:
+                            option_name = data.get("option_name")
+                            option_value = data.get("option_value")
+                            if option_name and option_value is not None:
+                                await instance.set_core_option(option_name, option_value)
+
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.error(f"Invalid command event: {e}")
+
+                # Check if session is still active
+                if session_id not in self.instances:
+                    logger.info(f"Session {session_id} ended, stopping command listener")
+                    break
+
+        except Exception as e:
+            logger.error(f"Error in command listener for {session_id}: {e}")
+        finally:
+            await pubsub.unsubscribe(command_channel, option_channel)
+            await pubsub.close()
+
+    async def _load_core_options_from_file(self, file_path: Path, core: str) -> dict:
+        """Load core options from a config file.
+
+        Args:
+            file_path: Path to the core options config file
+            core: Core name (e.g., "melonds")
+
+        Returns:
+            Dictionary of core options
+        """
+        try:
+            core_options = {}
+            core_name = core.lower().replace('ra-', '') if core else ""
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+
+                    # Format: option_name = "value"
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+
+                        # Remove quotes from value
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+
+                        # Only include options for the current core
+                        if core_name and key.lower().startswith(core_name + '_'):
+                            core_options[key] = value
+
+            return core_options
+
+        except Exception as e:
+            logger.error(f"Failed to load core options from {file_path}: {e}")
+            return {}
+
+    async def _watch_and_backup_core_options(self, session_id: str, core: str):
+        """Watch for RetroArch to generate core options file, then backup and notify frontend.
+
+        This runs asynchronously without blocking the player startup.
+        Used as fallback when warmup fails.
+
+        Args:
+            session_id: Session ID
+            core: Core name (e.g., "melonds")
+        """
+        try:
+            config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
+            backup_path = Path("/app/romm/config/retroarch") / f"{core.lower()}-core-options.cfg"
+
+            logger.info(f"Watcher started for {core}, waiting for {config_file}")
+
+            # Wait up to 30 seconds for RetroArch to create the file
+            timeout = 30
+            elapsed = 0
+            check_interval = 0.5  # Check every 500ms
+
+            while not config_file.exists() and elapsed < timeout:
+                await asyncio.sleep(check_interval)
+                elapsed += check_interval
+
+                # Stop if session was closed
+                if session_id not in self.instances:
+                    logger.info(f"Session {session_id} closed, stopping watcher for {core}")
+                    return
+
+            if not config_file.exists():
+                logger.warning(f"Core options file not created after {timeout}s for {core}")
+                return
+
+            logger.info(f"Core options file detected after {elapsed:.1f}s for {core}")
+
+            # Load core options
+            core_options = await self._load_core_options_from_file(config_file, core)
+
+            if core_options:
+                # Save backup
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(config_file, backup_path)
+                logger.info(f"Backed up {len(core_options)} core options for {core} to {backup_path}")
+
+                # Update Redis
+                options_key = f"retroarch:core_options:{session_id}"
+                await async_cache.set(options_key, json.dumps(core_options), ex=300)
+                logger.info(f"Updated Redis with {len(core_options)} core options for session {session_id}")
+
+                # Notify frontend via Socket.IO
+                await netplay_socket_handler.socket_server.emit(
+                    "retroarch-core-options-ready",
+                    {
+                        "session_id": session_id,
+                        "core_options": core_options,
+                    },
+                    room=session_id,
+                )
+                logger.info(f"Notified frontend via Socket.IO of core options update for {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error in core options watcher for {core}: {e}", exc_info=True)
+
+    async def _warmup_core_options(self, core: str, display_num: int, rom_path: str) -> bool:
+        """Launch RetroArch briefly with ROM to generate core options file, then backup it.
+
+        This is only called when no backup exists for a core.
+
+        Args:
+            core: Core name (e.g., "melonds")
+            display_num: X11 display number to use
+            rom_path: Path to the ROM file to load
+
+        Returns:
+            True if warmup succeeded and backup was created, False otherwise
+        """
+        try:
+            config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
+            backup_path = Path("/app/romm/config/retroarch") / f"{core.lower()}-core-options.cfg"
+
+            logger.info(f"Starting warmup for {core} to generate core options...")
+
+            # Set environment for Xvfb display
+            env = os.environ.copy()
+            env["DISPLAY"] = f":{display_num}"
+
+            # Create persistent directory for RetroArch config
+            config_dir = Path("/tmp/retroarch_config")
+            config_dir.mkdir(exist_ok=True)
+
+            # Create temporary config file for warmup
+            warmup_config_path = f"/tmp/retroarch_warmup_{core}.cfg"
+            core_options_path = config_dir / "retroarch-core-options.cfg"
+
+            with open(warmup_config_path, "w") as f:
+                # Include base config
+                f.write('#include "/etc/retroarch.cfg"\n')
+                f.write(f'core_options_path = "{core_options_path}"\n')
+                f.write("game_specific_options = \"false\"\n")
+                f.write("auto_overrides_enable = \"false\"\n")
+                f.write("auto_remaps_enable = \"false\"\n")
+
+            # Launch RetroArch with actual ROM
+            cmd = [
+                "retroarch",
+                "--config", warmup_config_path,
+                "-L", f"/usr/lib/libretro/{core}_libretro.so",
+                "--fullscreen",
+                rom_path,
+            ]
+
+            warmup_process = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            logger.info(f"Warmup process started (PID: {warmup_process.pid})")
+
+            # Wait 2 seconds for RetroArch to initialize
+            await asyncio.sleep(2)
+
+            # Terminate RetroArch gracefully
+            warmup_process.terminate()
+
+            # Wait for process to finish (with timeout)
+            try:
+                warmup_process.wait(timeout=5)
+                logger.info(f"Warmup process terminated for {core}")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Warmup process didn't terminate gracefully, killing it")
+                warmup_process.kill()
+                warmup_process.wait()
+
+            # Clean up warmup config
+            try:
+                os.remove(warmup_config_path)
+            except:
+                pass
+
+            # Wait a bit for file to be written
+            await asyncio.sleep(0.5)
+
+            # Check if core options file was created
+            if config_file.exists():
+                # Load and backup
+                core_options = await self._load_core_options_from_file(config_file, core)
+
+                if core_options:
+                    # Save backup
+                    backup_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(config_file, backup_path)
+                    logger.info(f"Warmup successful: Backed up {len(core_options)} core options for {core} to {backup_path}")
+                    return True
+                else:
+                    logger.warning(f"Core options file created but no options found for {core}")
+                    return False
+            else:
+                logger.warning(f"Warmup failed: Core options file not created for {core}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error during warmup for {core}: {e}", exc_info=True)
+            return False
+
     async def _start_session(self, session: RetroArchSession):
         """Start a new RetroArch streaming session"""
         try:
@@ -984,6 +1328,16 @@ class RetroArchDaemon:
                 )
                 return
 
+            # Check if we need to warmup core options (if backup doesn't exist)
+            backup_path = Path("/app/romm/config/retroarch") / f"{session.core.lower()}-core-options.cfg"
+            if not backup_path.exists():
+                logger.info(f"No backup found for {session.core}, running warmup to generate core options")
+                warmup_success = await self._warmup_core_options(session.core, display_num, rom_path)
+                if warmup_success:
+                    logger.info(f"Warmup completed successfully for {session.core}")
+                else:
+                    logger.warning(f"Warmup failed for {session.core}, continuing anyway")
+
             # Create instance
             instance = RetroArchInstance(
                 session_id=session.session_id,
@@ -1032,6 +1386,9 @@ class RetroArchDaemon:
             # Start real-time input listener (pubsub - no polling delay)
             asyncio.create_task(self._listen_for_inputs(session.session_id, instance))
 
+            # Start real-time command listener (pubsub - no polling delay)
+            asyncio.create_task(self._listen_for_commands(session.session_id, instance))
+
             # Store touchscreen region config in Redis for frontend
             if instance.touchscreen_region:
                 region_key = f"retroarch:touchscreen_region:{session.session_id}"
@@ -1044,11 +1401,24 @@ class RetroArchDaemon:
                 await async_cache.set(region_key, json.dumps(region_data), ex=300)
 
             # Load and store core options automatically for frontend
-            core_options = await instance.get_core_options()
-            if core_options:
+            # Try to load from backup first
+            backup_path = Path("/app/romm/config/retroarch") / f"{session.core.lower()}-core-options.cfg"
+            core_options = {}
+
+            if backup_path.exists():
+                # Load from backup immediately
+                logger.info(f"Loading core options from backup: {backup_path}")
+                core_options = await self._load_core_options_from_file(backup_path, session.core)
+                if core_options:
+                    options_key = f"retroarch:core_options:{session.session_id}"
+                    await async_cache.set(options_key, json.dumps(core_options), ex=300)
+                    logger.info(f"Loaded {len(core_options)} core options from backup for {session.core}")
+            else:
+                # No backup yet - start watcher to wait for RetroArch to generate it
+                logger.info(f"No backup found for {session.core}, starting async watcher")
                 options_key = f"retroarch:core_options:{session.session_id}"
-                await async_cache.set(options_key, json.dumps(core_options), ex=300)
-                logger.info(f"Stored {len(core_options)} core options for session {session.session_id}")
+                await async_cache.set(options_key, json.dumps({}), ex=300)  # Start with empty
+                asyncio.create_task(self._watch_and_backup_core_options(session.session_id, session.core))
 
             # Update session in Redis with WebRTC offer and running state
             session.webrtc_offer = offer_sdp
