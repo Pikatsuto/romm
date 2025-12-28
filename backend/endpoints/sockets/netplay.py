@@ -139,6 +139,12 @@ async def _handle_leave(sid: str, session_id: str, player_id: str):
     )
 
 
+@netplay_socket_handler.socket_server.on("join")  # type: ignore
+async def join(sid: str, session_id: str):
+    """Join a Socket.IO room for receiving session-specific events (e.g., core options updates)"""
+    await netplay_socket_handler.socket_server.enter_room(sid, session_id)
+
+
 @netplay_socket_handler.socket_server.on("leave-room")  # type: ignore
 async def leave_room(sid: str):
     stored_session = await netplay_socket_handler.socket_server.get_session(sid)
@@ -281,6 +287,63 @@ async def retroarch_input(sid: str, data: dict):
     await async_cache.publish(
         f"retroarch:input:{session_id}",
         json.dumps(input_event),
+    )
+
+
+@netplay_socket_handler.socket_server.on("retroarch-command")  # type: ignore
+async def retroarch_command(sid: str, data: dict):
+    """Send a command to RetroArch instance.
+
+    Supported commands:
+    - SAVESTATE: Save state
+    - LOADSTATE: Load state
+    - RESET: Restart game
+    - SCREENSHOT: Take screenshot
+    - PAUSE_TOGGLE: Pause/Resume game
+    - SAVE_AND_QUIT: Save state and exit
+
+    Args:
+        sid: Socket ID of the sender
+        data: Contains session_id and command
+    """
+    from handler.redis_handler import async_cache
+    import json
+
+    session_id = data.get("session_id")
+    command = data.get("command")
+
+    if not session_id or not command:
+        return
+
+    # Publish command to Redis for daemon to execute
+    await async_cache.publish(
+        f"retroarch:command:{session_id}",
+        json.dumps({"command": command}),
+    )
+
+
+@netplay_socket_handler.socket_server.on("retroarch-set-core-option")  # type: ignore
+async def retroarch_set_core_option(sid: str, data: dict):
+    """Set a core option value in real-time.
+
+    Args:
+        sid: Socket ID of the sender
+        data: Contains session_id, option_name, and option_value
+    """
+    from handler.redis_handler import async_cache
+    import json
+
+    session_id = data.get("session_id")
+    option_name = data.get("option_name")
+    option_value = data.get("option_value")
+
+    if not session_id or not option_name or option_value is None:
+        return
+
+    # Publish to Redis for daemon to apply
+    await async_cache.publish(
+        f"retroarch:set_option:{session_id}",
+        json.dumps({"option_name": option_name, "option_value": option_value}),
     )
 
 

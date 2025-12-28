@@ -12,6 +12,13 @@ interface StartSessionRequest {
 interface StartSessionResponse {
   session_id: string;
   webrtc_offer: string;
+  touchscreen_region?: {
+    x_offset: number;
+    y_offset: number;
+    width: number;
+    height: number;
+  };
+  core_options?: Record<string, string>;
 }
 
 interface SessionInfoResponse {

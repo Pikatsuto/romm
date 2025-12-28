@@ -57,6 +57,7 @@ class StartSessionResponse(BaseModel):
     session_id: str
     webrtc_offer: str
     touchscreen_region: TouchscreenRegion | None = None  # Only for cores with touchscreen
+    core_options: dict[str, str] = {}  # Core-specific options loaded from RetroArch
 
 
 class AnswerSessionRequest(BaseModel):
@@ -210,10 +211,23 @@ async def start_stream(
                 except (json.JSONDecodeError, KeyError) as e:
                     log.warning(f"Failed to parse touchscreen region: {e}")
 
+            # Retrieve core options from Redis (populated by daemon when RetroArch starts)
+            options_key = f"retroarch:core_options:{session_id}"
+            options_data = await async_cache.get(options_key)
+            core_options = {}
+
+            if options_data:
+                try:
+                    core_options = json.loads(options_data)
+                    log.info(f"Retrieved {len(core_options)} core options for session {session_id}")
+                except json.JSONDecodeError as e:
+                    log.warning(f"Failed to parse core options: {e}")
+
             return StartSessionResponse(
                 session_id=session_id,
                 webrtc_offer=updated_session.webrtc_offer,
                 touchscreen_region=touchscreen_region,
+                core_options=core_options,
             )
 
         # Check for error state

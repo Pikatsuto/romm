@@ -39,6 +39,9 @@ const touchscreenRegion = ref<{
   height: number;
 } | null>(null);
 
+// Core options loaded from backend
+const coreOptions = ref<Record<string, string>>({});
+
 // Pointer lock state for cursor capture
 const isPointerLocked = ref(false);
 // Virtual mouse position when pointer is locked (pixels within touchscreen zone)
@@ -100,9 +103,13 @@ async function startSession() {
 
     sessionId.value = data.session_id;
     touchscreenRegion.value = data.touchscreen_region || null;
+    coreOptions.value = data.core_options || {};
     console.log("[RetroArch] Session created:", sessionId.value);
     if (touchscreenRegion.value) {
       console.log("[RetroArch] Touchscreen region:", touchscreenRegion.value);
+    }
+    if (Object.keys(coreOptions.value).length > 0) {
+      console.log(`[RetroArch] Core options loaded: ${Object.keys(coreOptions.value).length} options`);
     }
 
     statusMessage.value = "Setting up WebRTC connection...";
@@ -203,6 +210,12 @@ function connectSocket() {
 
   socket.value.on("connect", () => {
     console.log("[RetroArch] SocketIO connected");
+
+    // Join the session room to receive targeted events
+    if (sessionId.value) {
+      socket.value?.emit("join", sessionId.value);
+      console.log(`[RetroArch] Joined room: ${sessionId.value}`);
+    }
   });
 
   socket.value.on("disconnect", () => {
@@ -211,6 +224,17 @@ function connectSocket() {
 
   socket.value.on("connect_error", (err: Error) => {
     console.error("[RetroArch] SocketIO connection error:", err);
+  });
+
+  // Listen for core options updates from backend
+  socket.value.on("retroarch-core-options-ready", (data: { session_id: string; core_options: Record<string, string> }) => {
+    console.log(`[RetroArch] Core options ready:`, data.core_options);
+
+    if (data.session_id === sessionId.value) {
+      // Update the core options ref
+      coreOptions.value = data.core_options;
+      console.log(`[RetroArch] Updated ${Object.keys(data.core_options).length} core options dynamically`);
+    }
   });
 }
 
@@ -417,43 +441,64 @@ function handleContainerMouseMove() {
 }
 
 // Menu handlers
+function sendCommand(command: string) {
+  if (!socket.value || !sessionId.value) {
+    console.error("[RetroArch] Cannot send command: socket or sessionId not available");
+    return;
+  }
+
+  socket.value.emit("retroarch-command", {
+    session_id: sessionId.value,
+    command: command,
+  });
+
+  console.log(`[RetroArch] Sent command: ${command}`);
+}
+
 function handleQuickSave() {
-  // TODO: Implement quick save via RetroArch API
-  console.log("[RetroArch] Quick save requested");
+  sendCommand("SAVESTATE");
 }
 
 function handleQuickLoad() {
-  // TODO: Implement quick load via RetroArch API
-  console.log("[RetroArch] Quick load requested");
+  sendCommand("LOADSTATE");
 }
 
 function handleRestart() {
-  // TODO: Implement restart via RetroArch API
-  console.log("[RetroArch] Restart requested");
+  sendCommand("RESET");
 }
 
 function handleScreenshot() {
-  // TODO: Implement screenshot via RetroArch API
-  console.log("[RetroArch] Screenshot requested");
+  sendCommand("SCREENSHOT");
 }
 
 function handleTogglePause() {
-  // TODO: Implement pause/resume via RetroArch API
-  console.log("[RetroArch] Toggle pause requested");
+  sendCommand("PAUSE_TOGGLE");
 }
 
 function handleSaveAndQuit() {
-  // TODO: Implement save & quit via RetroArch API
-  console.log("[RetroArch] Save & quit requested");
-  // For now, just exit
-  exitToGameDetails();
+  sendCommand("SAVE_AND_QUIT");
+  // Wait a bit for save to complete, then exit
+  setTimeout(() => {
+    exitToGameDetails();
+  }, 1000);
 }
 
 function handleSettingsChanged(newSettings: any) {
-  // TODO: Send settings to RetroArch via socket.io
+  if (!socket.value || !sessionId.value) {
+    console.error("[RetroArch] Cannot send settings: socket or sessionId not available");
+    return;
+  }
+
+  // Send each changed setting to RetroArch
+  for (const [optionName, optionValue] of Object.entries(newSettings)) {
+    socket.value.emit("retroarch-set-core-option", {
+      session_id: sessionId.value,
+      option_name: optionName,
+      option_value: optionValue,
+    });
+  }
+
   console.log("[RetroArch] Settings changed:", newSettings);
-  // The settings will be applied to RetroArch daemon in a future update
-  // For now, they are saved in localStorage and will persist per-core
 }
 </script>
 
@@ -502,6 +547,7 @@ function handleSettingsChanged(newSettings: any) {
       :core="core"
       :session-id="sessionId"
       :socket="socket"
+      :core-options-from-backend="coreOptions"
       :is-fullscreen="gameControls.isFullscreen.value"
       @fullscreen="gameControls.toggleFullscreen(containerRef)"
       @quick-save="handleQuickSave"
