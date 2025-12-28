@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     retroarch \
     ffmpeg \
     netcat-openbsd \
+    xdotool \
+    x11-xserver-utils \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
     libsdl2-2.0-0 \

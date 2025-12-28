@@ -42,11 +42,21 @@ class StartSessionRequest(BaseModel):
     screen_height: int | None = None
 
 
+class TouchscreenRegion(BaseModel):
+    """Touchscreen region configuration for dual-screen systems."""
+
+    x_offset: float  # Ratio 0.0-1.0
+    y_offset: float  # Ratio 0.0-1.0
+    width: float     # Ratio 0.0-1.0
+    height: float    # Ratio 0.0-1.0
+
+
 class StartSessionResponse(BaseModel):
     """Response containing session ID and WebRTC offer."""
 
     session_id: str
     webrtc_offer: str
+    touchscreen_region: TouchscreenRegion | None = None  # Only for cores with touchscreen
 
 
 class AnswerSessionRequest(BaseModel):
@@ -182,9 +192,28 @@ async def start_stream(
         # Check if daemon has generated the offer
         if updated_session.webrtc_offer and updated_session.state == SessionState.RUNNING:
             log.info(f"Session {session_id} is ready with WebRTC offer")
+
+            # Check if there's a touchscreen region config in Redis
+            region_key = f"retroarch:touchscreen_region:{session_id}"
+            region_data = await async_cache.get(region_key)
+            touchscreen_region = None
+
+            if region_data:
+                try:
+                    region = json.loads(region_data)
+                    touchscreen_region = TouchscreenRegion(
+                        x_offset=region["x_offset"],
+                        y_offset=region["y_offset"],
+                        width=region["width"],
+                        height=region["height"],
+                    )
+                except (json.JSONDecodeError, KeyError) as e:
+                    log.warning(f"Failed to parse touchscreen region: {e}")
+
             return StartSessionResponse(
                 session_id=session_id,
                 webrtc_offer=updated_session.webrtc_offer,
+                touchscreen_region=touchscreen_region,
             )
 
         # Check for error state
