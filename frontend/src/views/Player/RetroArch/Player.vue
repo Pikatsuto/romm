@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import type { SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
@@ -8,6 +8,8 @@ import storeConfig from "@/stores/config";
 import type { DetailedRom } from "@/stores/roms";
 import { io, Socket } from "socket.io-client";
 import { storeToRefs } from "pinia";
+import { useGameControls } from "./useGameControls";
+import PlayerMenu from "./PlayerMenu.vue";
 
 const props = defineProps<{
   rom: DetailedRom;
@@ -20,6 +22,8 @@ const router = useRouter();
 const configStore = storeConfig();
 const { config } = storeToRefs(configStore);
 const videoRef = ref<HTMLVideoElement>();
+const containerRef = ref<HTMLDivElement>();
+const playerMenuRef = ref<InstanceType<typeof PlayerMenu>>();
 const sessionId = ref<string | null>(null);
 const peerConnection = ref<RTCPeerConnection | null>(null);
 const socket = ref<Socket | null>(null);
@@ -27,7 +31,33 @@ const statusMessage = ref<string>("Initializing RetroArch...");
 const isLoading = ref(true);
 const error = ref<string | null>(null);
 
+// Touchscreen region configuration from backend (DS, 3DS, etc.)
+const touchscreenRegion = ref<{
+  x_offset: number;
+  y_offset: number;
+  width: number;
+  height: number;
+} | null>(null);
+
+// Pointer lock state for cursor capture
+const isPointerLocked = ref(false);
+// Virtual mouse position when pointer is locked (pixels within touchscreen zone)
+const virtualMouseX = ref(0);
+const virtualMouseY = ref(0);
+
+// Throttle mousemove events to prevent flooding
+let lastMouseMoveTime = 0;
+const MOUSE_MOVE_THROTTLE_MS = 8; // ~120 FPS for better responsiveness
+
+// Game controls (gamepad, virtual gamepad, fullscreen)
+const gameControls = useGameControls(() =>
+  sessionId.value && socket.value
+    ? { sessionId: sessionId.value, socket: socket.value }
+    : null
+)
+
 onMounted(async () => {
+  document.addEventListener("pointerlockchange", handlePointerLockChange);
   try {
     await startSession();
   } catch (err) {
@@ -38,8 +68,16 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(async () => {
+  document.removeEventListener("pointerlockchange", handlePointerLockChange);
+  if (document.pointerLockElement) {
+    document.exitPointerLock();
+  }
   await stopSession();
 });
+
+function handlePointerLockChange() {
+  isPointerLocked.value = document.pointerLockElement === videoRef.value;
+}
 
 async function startSession() {
   try {
@@ -61,7 +99,11 @@ async function startSession() {
     });
 
     sessionId.value = data.session_id;
+    touchscreenRegion.value = data.touchscreen_region || null;
     console.log("[RetroArch] Session created:", sessionId.value);
+    if (touchscreenRegion.value) {
+      console.log("[RetroArch] Touchscreen region:", touchscreenRegion.value);
+    }
 
     statusMessage.value = "Setting up WebRTC connection...";
 
@@ -154,7 +196,8 @@ async function setupWebRTC(offerSdp: string) {
 }
 
 function connectSocket() {
-  socket.value = io("/netplay/socket.io", {
+  socket.value = io({
+    path: "/netplay/socket.io",
     transports: ["websocket"],
   });
 
@@ -227,27 +270,113 @@ function handleKeyUp(event: KeyboardEvent) {
 }
 
 function handleMouseMove(event: MouseEvent) {
-  if (!socket.value || !sessionId.value || !videoRef.value) return;
+  if (!socket.value || !sessionId.value || !videoRef.value || !touchscreenRegion.value) return;
+
+  // Throttle mousemove events to prevent flooding
+  const now = Date.now();
+  if (now - lastMouseMoveTime < MOUSE_MOVE_THROTTLE_MS) {
+    return;
+  }
+  lastMouseMoveTime = now;
 
   const rect = videoRef.value.getBoundingClientRect();
-  const x = ((event.clientX - rect.left) / rect.width) * 65535;
-  const y = ((event.clientY - rect.top) / rect.height) * 65535;
+  const { x_offset, y_offset, width, height } = touchscreenRegion.value;
+
+  // Calculate touchscreen zone size in pixels
+  const touchscreenWidthPx = rect.width * width;
+  const touchscreenHeightPx = rect.height * height;
+
+  let touchPixelX: number;
+  let touchPixelY: number;
+
+  if (isPointerLocked.value) {
+    // When pointer is locked, accumulate relative movements
+    virtualMouseX.value += event.movementX;
+    virtualMouseY.value += event.movementY;
+
+    // Clamp to touchscreen zone bounds
+    virtualMouseX.value = Math.max(0, Math.min(touchscreenWidthPx, virtualMouseX.value));
+    virtualMouseY.value = Math.max(0, Math.min(touchscreenHeightPx, virtualMouseY.value));
+
+    touchPixelX = virtualMouseX.value;
+    touchPixelY = virtualMouseY.value;
+  } else {
+    // When pointer is not locked, use absolute position
+    const relX = (event.clientX - rect.left) / rect.width;
+    const relY = (event.clientY - rect.top) / rect.height;
+
+    // Check if in touchscreen region
+    if (
+      relX < x_offset ||
+      relX > x_offset + width ||
+      relY < y_offset ||
+      relY > y_offset + height
+    ) {
+      return; // Outside touchscreen region
+    }
+
+    // Calculate mouse position in pixels within touchscreen zone
+    touchPixelX = (relX - x_offset) * rect.width;
+    touchPixelY = (relY - y_offset) * rect.height;
+  }
+
+  // Normalize coordinates to 0-1 range for backend
+  const normalizedX = touchPixelX / touchscreenWidthPx;
+  const normalizedY = touchPixelY / touchscreenHeightPx;
 
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
     event: {
       type: "mousemove",
-      x: Math.floor(x),
-      y: Math.floor(y),
+      x: normalizedX,
+      y: normalizedY,
       timestamp: Date.now(),
     },
   });
 }
 
 function handleMouseDown(event: MouseEvent) {
-  if (!socket.value || !sessionId.value) return;
+  if (!socket.value || !sessionId.value || !videoRef.value || !touchscreenRegion.value) return;
 
   event.preventDefault();
+
+  // Get mouse position relative to video element
+  const rect = videoRef.value.getBoundingClientRect();
+  const relX = (event.clientX - rect.left) / rect.width;
+  const relY = (event.clientY - rect.top) / rect.height;
+
+  // Check if in touchscreen region
+  const { x_offset, y_offset, width, height } = touchscreenRegion.value;
+  if (
+    relX < x_offset ||
+    relX > x_offset + width ||
+    relY < y_offset ||
+    relY > y_offset + height
+  ) {
+    return; // Outside touchscreen region
+  }
+
+  function curve(v: number): number {
+    const sign = Math.sign(v);
+    const abs = Math.abs(v);
+    return sign * Math.pow(abs, 1.4); // 1.2–1.5 à tester
+  }
+
+  // If not locked yet, request pointer lock (hide cursor)
+  if (!isPointerLocked.value) {
+    // Initialize virtual position to current mouse position within touchscreen zone
+    const touchscreenWidthPx = rect.width * width;
+    const touchscreenHeightPx = rect.height * height;
+    virtualMouseX.value = (relX - x_offset) * rect.width;
+    virtualMouseY.value = (relY - y_offset) * rect.height;
+    virtualMouseX.value = curve(virtualMouseX.value);
+    virtualMouseY.value = curve(virtualMouseY.value);
+
+    videoRef.value.requestPointerLock();
+    return; // Don't send click when requesting lock
+  }
+
+  // Send click only if pointer is already locked
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
     event: {
@@ -259,7 +388,12 @@ function handleMouseDown(event: MouseEvent) {
 }
 
 function handleMouseUp(event: MouseEvent) {
-  if (!socket.value || !sessionId.value) return;
+  if (!socket.value || !sessionId.value || !videoRef.value || !touchscreenRegion.value) return;
+
+  event.preventDefault();
+
+  // Only send mouseup if pointer is locked
+  if (!isPointerLocked.value) return;
 
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
@@ -274,13 +408,62 @@ function handleMouseUp(event: MouseEvent) {
 function exitToGameDetails() {
   router.push({ name: ROUTES.ROM, params: { rom: props.rom.id } });
 }
+
+// Container mouse move handler to show/hide menu
+function handleContainerMouseMove() {
+  if (playerMenuRef.value) {
+    playerMenuRef.value.handleMouseMove();
+  }
+}
+
+// Menu handlers
+function handleQuickSave() {
+  // TODO: Implement quick save via RetroArch API
+  console.log("[RetroArch] Quick save requested");
+}
+
+function handleQuickLoad() {
+  // TODO: Implement quick load via RetroArch API
+  console.log("[RetroArch] Quick load requested");
+}
+
+function handleRestart() {
+  // TODO: Implement restart via RetroArch API
+  console.log("[RetroArch] Restart requested");
+}
+
+function handleScreenshot() {
+  // TODO: Implement screenshot via RetroArch API
+  console.log("[RetroArch] Screenshot requested");
+}
+
+function handleTogglePause() {
+  // TODO: Implement pause/resume via RetroArch API
+  console.log("[RetroArch] Toggle pause requested");
+}
+
+function handleSaveAndQuit() {
+  // TODO: Implement save & quit via RetroArch API
+  console.log("[RetroArch] Save & quit requested");
+  // For now, just exit
+  exitToGameDetails();
+}
+
+function handleSettingsChanged(newSettings: any) {
+  // TODO: Send settings to RetroArch via socket.io
+  console.log("[RetroArch] Settings changed:", newSettings);
+  // The settings will be applied to RetroArch daemon in a future update
+  // For now, they are saved in localStorage and will persist per-core
+}
 </script>
 
 <template>
   <div
+    ref="containerRef"
     id="retroarch-player"
     @keydown="handleKeyDown"
     @keyup="handleKeyUp"
+    @mousemove="handleContainerMouseMove"
     tabindex="0"
     class="retroarch-container"
   >
@@ -311,23 +494,32 @@ function exitToGameDetails() {
       @mouseup="handleMouseUp"
     />
 
-    <!-- Controls Overlay -->
-    <div class="controls-overlay" v-if="!isLoading && !error">
-      <v-btn icon="mdi-close" color="error" @click="exitToGameDetails" />
-    </div>
+    <!-- Player Menu (EmulatorJS-like UI) -->
+    <PlayerMenu
+      ref="playerMenuRef"
+      v-if="!isLoading && !error && sessionId && socket"
+      :rom="rom"
+      :core="core"
+      :session-id="sessionId"
+      :socket="socket"
+      :is-fullscreen="gameControls.isFullscreen.value"
+      @fullscreen="gameControls.toggleFullscreen(containerRef)"
+      @quick-save="handleQuickSave"
+      @quick-load="handleQuickLoad"
+      @restart="handleRestart"
+      @screenshot="handleScreenshot"
+      @toggle-pause="handleTogglePause"
+      @save-and-quit="handleSaveAndQuit"
+      @settings-changed="handleSettingsChanged"
+      @exit="exitToGameDetails"
+    />
 
-    <!-- Info Overlay -->
-    <div class="info-overlay" v-if="!isLoading && !error">
-      <div class="info-chip">
-        <v-chip size="small" color="primary">
-          <v-icon start>mdi-gamepad-variant</v-icon>
-          {{ rom.name }}
-        </v-chip>
-        <v-chip size="small" color="secondary" class="ml-2">
-          <v-icon start>mdi-cpu-64-bit</v-icon>
-          {{ core }}
-        </v-chip>
-      </div>
+    <!-- Gamepad Connected Indicator (bottom left) -->
+    <div v-if="!isLoading && !error && gameControls.gamepadConnected.value" class="gamepad-indicator">
+      <v-chip size="small" color="success">
+        <v-icon start size="small">mdi-controller</v-icon>
+        Gamepad Connected
+      </v-chip>
     </div>
   </div>
 </template>
@@ -382,22 +574,29 @@ function exitToGameDetails() {
   align-items: center;
 }
 
-.controls-overlay {
+.gamepad-indicator {
   position: absolute;
-  top: 1rem;
-  right: 1rem;
-  z-index: 20;
-}
-
-.info-overlay {
-  position: absolute;
-  top: 1rem;
+  bottom: 1rem;
   left: 1rem;
-  z-index: 20;
+  z-index: 90;
+  opacity: 0.9;
 }
 
-.info-chip {
-  display: flex;
-  align-items: center;
+.mouse-hint {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 </style>
