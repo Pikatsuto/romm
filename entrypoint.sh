@@ -79,12 +79,6 @@ watchfiles \
 
 # Start RetroArch streaming daemon if enabled
 if [[ ${RETROARCH_ENABLED} == "true" ]]; then
-	echo "Starting PipeWire for audio..."
-	pipewire &
-	sleep 1
-	wireplumber &
-	sleep 1
-
 	echo "Starting RetroArch streaming daemon..."
 	PYTHONPATH="/app/backend:${PYTHONPATH-}" python3 /app/backend/services/retroarch_daemon.py &
 fi

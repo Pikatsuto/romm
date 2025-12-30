@@ -33,6 +33,8 @@ from aiortc import (
 )
 from aiortc.contrib.media import MediaPlayer
 from av import AudioFrame, VideoFrame
+import av
+import fractions
 
 from config.config_manager import config_manager
 from handler.retroarch_handler import retroarch_handler, RetroArchSession, SessionState
@@ -210,6 +212,110 @@ class XvfbDisplay:
     in_use: bool = False
 
 
+class ALSAAudioTrack(AudioStreamTrack):
+    """Custom AudioStreamTrack that captures audio from ALSA using FFmpeg subprocess"""
+
+    def __init__(self, device: str = "default"):
+        super().__init__()
+        self.device = device
+        self.process = None
+        self.container = None
+        self._start()
+
+    def _start(self):
+        """Start FFmpeg subprocess to capture audio from ALSA device"""
+        try:
+            self.process = subprocess.Popen(
+                [
+                    'ffmpeg',
+                    '-f', 'alsa',
+                    '-i', self.device,
+                    '-f', 's16le',
+                    '-ac', '2',
+                    '-ar', '48000',
+                    '-'
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            self.container = av.open(
+                self.process.stdout,
+                format='s16le',
+                mode='r',
+                options={
+                    'channels': '2',
+                    'sample_rate': '48000',
+                }
+            )
+            logger.info(f"Started audio capture from ALSA device: {self.device}")
+        except Exception as e:
+            logger.error(f"Failed to start ALSA capture: {e}")
+            if self.process:
+                self.process.kill()
+            raise
+
+    async def recv(self) -> AudioFrame:
+        """Receive next audio frame"""
+        try:
+            loop = asyncio.get_event_loop()
+
+            def read_frame():
+                try:
+                    for packet in self.container.demux():
+                        for frame in packet.decode():
+                            return frame
+                except Exception as e:
+                    logger.error(f"Error demuxing audio: {e}")
+                    return None
+                return None
+
+            frame = await loop.run_in_executor(None, read_frame)
+
+            if frame:
+                frame.pts = self._next_pts()
+                frame.time_base = fractions.Fraction(1, 48000)
+                return frame
+            else:
+                await asyncio.sleep(0.01)
+                raise Exception("No audio frame available, retrying...")
+
+        except Exception as e:
+            raise
+
+    def _next_pts(self) -> int:
+        """Generate next presentation timestamp"""
+        if not hasattr(self, '_pts'):
+            self._pts = 0
+        else:
+            self._pts += 960
+        return self._pts
+
+    def stop(self):
+        """Stop capturing audio"""
+        if self.container:
+            try:
+                self.container.close()
+            except:
+                pass
+            self.container = None
+
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=2)
+            except:
+                try:
+                    self.process.kill()
+                except:
+                    pass
+            self.process = None
+            logger.info(f"Stopped audio capture from ALSA device: {self.device}")
+
+    def __del__(self):
+        """Cleanup on deletion"""
+        self.stop()
+
+
 class XvfbManager:
     """Manages allocation and cleanup of Xvfb virtual displays"""
 
@@ -303,32 +409,35 @@ class RetroArchMediaSource:
         self.session_id = session_id
         self.width = width
         self.height = height
-        self.player: Optional[MediaPlayer] = None
+        self.video_player: Optional[MediaPlayer] = None
+        self.audio_track: Optional[ALSAAudioTrack] = None
 
     async def start(self):
-        """Start FFmpeg capture"""
+        """Start FFmpeg capture for video and audio"""
         try:
-            # FFmpeg command to capture X11 display
-            # TODO: Add PipeWire/PulseAudio audio capture
-            options = {
+            # Video capture: X11grab
+            video_options = {
                 "framerate": "30",
                 "video_size": f"{self.width}x{self.height}",
                 "thread_queue_size": "512",
             }
 
-            # Video source: X11grab
             video_source = f":{self.display_num}.0+0,0"
 
-            self.player = MediaPlayer(
+            self.video_player = MediaPlayer(
                 video_source,
                 format="x11grab",
-                options=options,
+                options=video_options,
             )
 
             logger.info(
-                f"Started FFmpeg capture for session {self.session_id} "
+                f"Started video capture for session {self.session_id} "
                 f"on display :{self.display_num} ({self.width}x{self.height})"
             )
+
+            # Audio capture: Capture from ALSA
+            self.audio_track = ALSAAudioTrack("default")
+            logger.info(f"Started audio capture for session {self.session_id} from ALSA")
 
         except Exception as e:
             logger.error(f"Failed to start FFmpeg capture: {e}")
@@ -336,19 +445,22 @@ class RetroArchMediaSource:
 
     def get_video_track(self) -> Optional[MediaStreamTrack]:
         """Get video track for WebRTC"""
-        return self.player.video if self.player else None
+        return self.video_player.video if self.video_player else None
 
     def get_audio_track(self) -> Optional[MediaStreamTrack]:
         """Get audio track for WebRTC"""
-        return self.player.audio if self.player else None
+        return self.audio_track
 
     async def stop(self):
         """Stop FFmpeg capture"""
-        if self.player:
-            # MediaPlayer doesn't have a direct stop method
-            # The underlying process will be cleaned up on deletion
-            self.player = None
-            logger.info(f"Stopped FFmpeg capture for session {self.session_id}")
+        if self.video_player:
+            self.video_player = None
+            logger.info(f"Stopped video capture for session {self.session_id}")
+
+        if self.audio_track:
+            self.audio_track.stop()
+            self.audio_track = None
+            logger.info(f"Stopped audio capture for session {self.session_id}")
 
 
 class RetroArchInstance:
@@ -417,6 +529,11 @@ class RetroArchInstance:
                 f.write("network_cmd_enable = \"true\"\n")
                 f.write("network_cmd_port = \"55355\"\n")
                 f.write("stdin_cmd_enable = \"true\"\n")
+
+                # Audio configuration for ALSA
+                f.write("audio_driver = \"alsa\"\n")
+                f.write("audio_enable = \"true\"\n")
+                f.write("audio_sync = \"true\"\n")
 
                 # Force core options to be saved to persistent location
                 f.write(f'core_options_path = "{core_options_path}"\n')

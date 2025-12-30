@@ -244,9 +244,9 @@ RUN apk add --no-cache \
     retroarch-joypad-autoconfig \
     xvfb \
     xvfb-run \
-    pipewire \
-    pipewire-pulse \
-    wireplumber \
+    alsa-lib \
+    alsa-utils \
+    alsa-plugins-pulse \
     ffmpeg \
     libx11 \
     mesa-gl \
