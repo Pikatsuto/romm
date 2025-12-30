@@ -413,6 +413,11 @@ class RetroArchInstance:
                 f.write("input_auto_mouse_grab = \"false\"\n")
                 f.write("input_overlay_show_mouse_cursor = \"false\"\n")
 
+                # Enable network commands for remote control (CRITICAL!)
+                f.write("network_cmd_enable = \"true\"\n")
+                f.write("network_cmd_port = \"55355\"\n")
+                f.write("stdin_cmd_enable = \"true\"\n")
+
                 # Force core options to be saved to persistent location
                 f.write(f'core_options_path = "{core_options_path}"\n')
                 f.write("game_specific_options = \"false\"\n")  # Use global core options file
@@ -525,25 +530,27 @@ class RetroArchInstance:
             return False
 
     async def _send_retroarch_command(self, command: str, read_response: bool = False) -> Optional[str]:
-        """Send command to RetroArch via network command interface"""
+        """Send command to RetroArch via network command interface (UDP)"""
         try:
-            # Send TCP command to RetroArch on localhost:55355
-            reader, writer = await asyncio.open_connection('127.0.0.1', 55355)
-            writer.write(f"{command}\n".encode())
-            await writer.drain()
+            # Create UDP socket
+            loop = asyncio.get_event_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: asyncio.DatagramProtocol(),
+                remote_addr=('127.0.0.1', 55355)
+            )
 
-            response = None
+            # Send UDP command to RetroArch on localhost:55355
+            transport.sendto(f"{command}\n".encode())
+
+            # Close the transport
+            transport.close()
+
+            # Note: UDP is fire-and-forget, so we can't reliably read responses
+            # RetroArch's UDP interface doesn't send responses for most commands
             if read_response:
-                # Read response with timeout
-                try:
-                    response = await asyncio.wait_for(reader.read(8192), timeout=1.0)
-                    response = response.decode('utf-8').strip()
-                except asyncio.TimeoutError:
-                    logger.warning(f"Timeout reading response for command '{command}'")
+                logger.warning(f"Response reading not supported for UDP commands")
 
-            writer.close()
-            await writer.wait_closed()
-            return response
+            return None
         except Exception as e:
             logger.error(f"Failed to send RetroArch command '{command}': {e}")
             return None
@@ -715,21 +722,28 @@ class RetroArchInstance:
         """Execute a RetroArch command.
 
         Supported commands:
-        - SAVESTATE: Save state
-        - LOADSTATE: Load state
-        - RESET: Restart game
+        - SAVESTATE: Save state to current slot
+        - LOADSTATE: Load state from current slot
+        - RESET: Restart game (restarts RetroArch cleanly)
         - SCREENSHOT: Take screenshot
         - PAUSE_TOGGLE: Pause/Resume game
         - SAVE_AND_QUIT: Save state and exit
         """
         try:
+            # Special handling for RESET: restart RetroArch cleanly instead of using RESET command
+            # This avoids crashes with cores that have unstable RESET implementations
+            if command == "RESET":
+                logger.info(f"Executing RESET by restarting RetroArch cleanly")
+                await self.restart()
+                return
+
+            # Map frontend commands to RetroArch UDP commands
             command_map = {
-                "SAVESTATE": "SAVESTATE",
-                "LOADSTATE": "LOADSTATE",
-                "RESET": "RESET",
+                "SAVESTATE": "SAVE_STATE",
+                "LOADSTATE": "LOAD_STATE",  # Uses current slot
                 "SCREENSHOT": "SCREENSHOT",
                 "PAUSE_TOGGLE": "PAUSE_TOGGLE",
-                "SAVE_AND_QUIT": "SAVESTATE",  # Will save then quit separately
+                "SAVE_AND_QUIT": "SAVE_STATE",  # Will save then quit separately
             }
 
             retroarch_cmd = command_map.get(command)
@@ -737,7 +751,7 @@ class RetroArchInstance:
                 logger.warning(f"Unknown command: {command}")
                 return
 
-            logger.info(f"Executing RetroArch command: {command}")
+            logger.info(f"Executing RetroArch command: {command} -> {retroarch_cmd}")
             await self._send_retroarch_command(retroarch_cmd)
 
             # Special handling for SAVE_AND_QUIT
@@ -848,6 +862,42 @@ class RetroArchInstance:
 
         # Return mapped key or original if single character
         return key_map.get(js_key, js_key.lower())
+
+    async def restart(self):
+        """Restart RetroArch cleanly to reset the game.
+
+        This is a safe alternative to the RESET command which can crash certain cores.
+        Only restarts the RetroArch process - the WebRTC stream and media capture continue running.
+        """
+        try:
+            logger.info(f"Restarting RetroArch process for session {self.session_id}")
+
+            # Terminate RetroArch process
+            if self.retroarch_process and self.retroarch_process.poll() is None:
+                self.retroarch_process.terminate()
+                try:
+                    self.retroarch_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"RetroArch didn't terminate gracefully, killing it")
+                    self.retroarch_process.kill()
+                    self.retroarch_process.wait()
+                logger.info(f"Terminated old RetroArch process (PID: {self.retroarch_process.pid})")
+
+            # Wait a bit for cleanup
+            await asyncio.sleep(0.5)
+
+            # Restart RetroArch (media capture continues on same Xvfb display)
+            if not await self.start_retroarch():
+                logger.error(f"Failed to restart RetroArch for session {self.session_id}")
+                return False
+
+            logger.info(f"Successfully restarted RetroArch for session {self.session_id} (new PID: {self.retroarch_process.pid})")
+            self.last_activity = datetime.now()
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to restart RetroArch for session {self.session_id}: {e}")
+            return False
 
     async def stop(self):
         """Stop RetroArch instance and cleanup"""
@@ -1036,7 +1086,7 @@ class RetroArchDaemon:
             async for message in pubsub.listen():
                 if message["type"] == "message":
                     try:
-                        channel = message["channel"].decode("utf-8")
+                        channel = message["channel"]
                         data = json.loads(message["data"])
 
                         if channel == command_channel:
