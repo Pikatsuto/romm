@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -212,34 +213,34 @@ class XvfbDisplay:
     in_use: bool = False
 
 
-class ALSAAudioTrack(AudioStreamTrack):
-    """Custom AudioStreamTrack that captures audio from ALSA using FFmpeg subprocess"""
+class FifoAudioTrack(AudioStreamTrack):
+    """Custom AudioStreamTrack that captures audio from a FIFO pipe"""
 
-    def __init__(self, device: str = "default"):
+    def __init__(self, fifo_path: str = "/tmp/audio.fifo", existing_fd: int = None):
         super().__init__()
-        self.device = device
-        self.process = None
+        self.fifo_path = fifo_path
+        self.fifo_fd = existing_fd  # Use existing fd if provided
         self.container = None
         self._start()
 
     def _start(self):
-        """Start FFmpeg subprocess to capture audio from ALSA device"""
+        """Start reading audio from FIFO"""
         try:
-            self.process = subprocess.Popen(
-                [
-                    'ffmpeg',
-                    '-f', 'alsa',
-                    '-i', self.device,
-                    '-f', 's16le',
-                    '-ac', '2',
-                    '-ar', '48000',
-                    '-'
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
+            # Use existing fd or open new one
+            if self.fifo_fd is None:
+                self.fifo_fd = os.open(self.fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+
+            # CRITICAL: Switch fd to blocking mode for av.open()
+            # av.open() doesn't handle non-blocking fds well
+            import fcntl
+            flags = fcntl.fcntl(self.fifo_fd, fcntl.F_GETFL)
+            fcntl.fcntl(self.fifo_fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+
+            # Create a file object from the descriptor
+            fifo_file = os.fdopen(self.fifo_fd, 'rb', buffering=0)
+
             self.container = av.open(
-                self.process.stdout,
+                fifo_file,
                 format='s16le',
                 mode='r',
                 options={
@@ -247,11 +248,14 @@ class ALSAAudioTrack(AudioStreamTrack):
                     'sample_rate': '48000',
                 }
             )
-            logger.info(f"Started audio capture from ALSA device: {self.device}")
+            logger.info(f"Started audio capture from FIFO: {self.fifo_path}")
         except Exception as e:
-            logger.error(f"Failed to start ALSA capture: {e}")
-            if self.process:
-                self.process.kill()
+            logger.error(f"Failed to start FIFO capture: {e}")
+            if self.fifo_fd is not None:
+                try:
+                    os.close(self.fifo_fd)
+                except:
+                    pass
             raise
 
     async def recv(self) -> AudioFrame:
@@ -299,17 +303,13 @@ class ALSAAudioTrack(AudioStreamTrack):
                 pass
             self.container = None
 
-        if self.process:
+        if self.fifo_fd is not None:
             try:
-                self.process.terminate()
-                self.process.wait(timeout=2)
+                os.close(self.fifo_fd)
             except:
-                try:
-                    self.process.kill()
-                except:
-                    pass
-            self.process = None
-            logger.info(f"Stopped audio capture from ALSA device: {self.device}")
+                pass
+            self.fifo_fd = None
+            logger.info(f"Stopped audio capture from FIFO: {self.fifo_path}")
 
     def __del__(self):
         """Cleanup on deletion"""
@@ -410,7 +410,131 @@ class RetroArchMediaSource:
         self.width = width
         self.height = height
         self.video_player: Optional[MediaPlayer] = None
-        self.audio_track: Optional[ALSAAudioTrack] = None
+        self.audio_track: Optional[FifoAudioTrack] = None
+
+        # Session-specific paths for ALSA FIFO audio capture
+        # Use short session ID suffix to keep device names manageable
+        session_suffix = session_id[:8] if len(session_id) > 8 else session_id
+        self.audio_fifo_path = f"/tmp/ra_audio_{session_suffix}.fifo"
+        self.alsa_config_path = f"/tmp/ra_asound_{session_suffix}.conf"
+        self.audio_device_name = f"ra_{session_suffix}"
+
+    def setup_audio_fifo(self):
+        """Create FIFO and ALSA config for audio capture via file plugin.
+
+        This configures ALSA to write audio to a FIFO using the file plugin,
+        allowing audio capture without hardware devices like /dev/snd.
+        Each session has its own FIFO, config, and device name to support multiple players.
+        """
+        # Create FIFO if it doesn't exist
+        if not os.path.exists(self.audio_fifo_path):
+            try:
+                os.mkfifo(self.audio_fifo_path)
+                logger.info(f"Created audio FIFO: {self.audio_fifo_path}")
+            except FileExistsError:
+                pass  # Already exists
+
+        # Create ALSA config with file plugin
+        # Include default config with absolute path syntax
+        alsa_config = f'''</usr/share/alsa/alsa.conf>
+
+pcm.{self.audio_device_name} {{
+    type file
+    slave.pcm null
+    file "{self.audio_fifo_path}"
+    format "raw"
+}}
+
+pcm.null {{
+    type null
+}}
+'''
+        with open(self.alsa_config_path, 'w') as f:
+            f.write(alsa_config)
+        logger.info(f"Created ALSA config: {self.alsa_config_path} with device {self.audio_device_name}")
+
+    def get_alsa_env(self) -> dict:
+        """Get environment variables for ALSA config."""
+        return {"ALSA_CONFIG_PATH": self.alsa_config_path}
+
+    def get_audio_device(self) -> str:
+        """Get the ALSA device name for RetroArch config."""
+        return self.audio_device_name
+
+    def open_audio_fifo(self):
+        """Open FIFO for reading BEFORE RetroArch starts and start drain thread.
+
+        This is critical because FIFOs block on open until both ends are connected.
+        If we don't open the read end first, RetroArch will block trying to open
+        the write end via ALSA.
+
+        Additionally, we MUST actively read from the FIFO to drain its buffer.
+        If no one reads, the 64KB buffer fills up and the writer (RetroArch) blocks.
+
+        The drain thread reads and discards data until FifoAudioTrack takes over.
+        """
+        if not hasattr(self, '_fifo_reader_fd') or self._fifo_reader_fd is None:
+            try:
+                # Open FIFO for reading - this unblocks any writer trying to open it
+                self._fifo_reader_fd = os.open(self.audio_fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+                logger.info(f"Opened audio FIFO for reading: {self.audio_fifo_path}")
+
+                # Start drain thread to prevent buffer from filling up
+                self._drain_stop_event = threading.Event()
+                self._drain_thread = threading.Thread(
+                    target=self._drain_fifo,
+                    args=(self._fifo_reader_fd, self._drain_stop_event),
+                    daemon=True
+                )
+                self._drain_thread.start()
+                logger.info(f"Started FIFO drain thread for: {self.audio_fifo_path}")
+
+            except Exception as e:
+                logger.warning(f"Failed to open audio FIFO: {e}")
+                self._fifo_reader_fd = None
+
+    def _drain_fifo(self, fd: int, stop_event: threading.Event):
+        """Drain FIFO in background thread to prevent buffer overflow.
+
+        Reads and discards data until stop_event is set.
+        """
+        import select
+
+        while not stop_event.is_set():
+            try:
+                # Use select to check if data is available (with timeout)
+                readable, _, _ = select.select([fd], [], [], 0.1)
+                if readable:
+                    # Read and discard data
+                    try:
+                        n = os.read(fd, 8192)
+                        if not n:
+                            # EOF - FIFO closed on write end
+                            break
+                    except BlockingIOError:
+                        # No data available (non-blocking)
+                        pass
+                    except OSError as e:
+                        if e.errno == 9:  # Bad file descriptor - fd was closed
+                            break
+                        raise
+            except Exception as e:
+                logger.debug(f"FIFO drain error (may be normal): {e}")
+                break
+
+    def stop_drain_thread(self):
+        """Stop the FIFO drain thread."""
+        if hasattr(self, '_drain_stop_event') and self._drain_stop_event:
+            self._drain_stop_event.set()
+        if hasattr(self, '_drain_thread') and self._drain_thread:
+            self._drain_thread.join(timeout=1.0)
+            self._drain_thread = None
+        if hasattr(self, '_fifo_reader_fd') and self._fifo_reader_fd is not None:
+            try:
+                os.close(self._fifo_reader_fd)
+            except:
+                pass
+            self._fifo_reader_fd = None
 
     async def start(self):
         """Start FFmpeg capture for video and audio"""
@@ -435,9 +559,66 @@ class RetroArchMediaSource:
                 f"on display :{self.display_num} ({self.width}x{self.height})"
             )
 
-            # Audio capture: Capture from ALSA
-            self.audio_track = ALSAAudioTrack("default")
-            logger.info(f"Started audio capture for session {self.session_id} from ALSA")
+            # Audio capture: Read from session-specific FIFO
+            # RetroArch writes to the FIFO via ALSA file plugin
+            # First, stop the drain thread so FifoAudioTrack can take over reading
+            self.stop_drain_thread()
+
+            # Wait for data to be available in FIFO before creating audio track
+            # RetroArch needs time to start writing to the FIFO
+            # CRITICAL: Keep the fd open and pass it to FifoAudioTrack - don't close it!
+            import select
+            max_wait = 5.0  # Wait up to 5 seconds
+            wait_interval = 0.1
+            elapsed = 0
+            fifo_fd = None
+            fifo_ready = False
+
+            try:
+                fifo_fd = os.open(self.audio_fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+                while elapsed < max_wait:
+                    readable, _, _ = select.select([fifo_fd], [], [], wait_interval)
+                    if readable:
+                        # Check if there's actual data
+                        try:
+                            data = os.read(fifo_fd, 1024)
+                            if data:
+                                fifo_ready = True
+                                logger.info(f"FIFO has data after {elapsed:.1f}s, starting audio capture")
+                                break
+                        except BlockingIOError:
+                            pass
+                    elapsed += wait_interval
+            except Exception as e:
+                logger.warning(f"Error waiting for FIFO data: {e}")
+                if fifo_fd is not None:
+                    try:
+                        os.close(fifo_fd)
+                    except:
+                        pass
+                    fifo_fd = None
+
+            if fifo_ready and fifo_fd is not None:
+                try:
+                    # Pass the existing fd to FifoAudioTrack - don't close it!
+                    self.audio_track = FifoAudioTrack(self.audio_fifo_path, existing_fd=fifo_fd)
+                    logger.info(f"Started audio capture for session {self.session_id} from FIFO")
+                except Exception as e:
+                    logger.warning(f"Failed to start audio capture: {e}")
+                    self.audio_track = None
+                    if fifo_fd is not None:
+                        try:
+                            os.close(fifo_fd)
+                        except:
+                            pass
+            else:
+                logger.warning(f"No data in FIFO after {max_wait}s, audio disabled")
+                self.audio_track = None
+                if fifo_fd is not None:
+                    try:
+                        os.close(fifo_fd)
+                    except:
+                        pass
 
         except Exception as e:
             logger.error(f"Failed to start FFmpeg capture: {e}")
@@ -461,6 +642,15 @@ class RetroArchMediaSource:
             self.audio_track.stop()
             self.audio_track = None
             logger.info(f"Stopped audio capture for session {self.session_id}")
+
+        # Cleanup FIFO and ALSA config
+        try:
+            if os.path.exists(self.audio_fifo_path):
+                os.remove(self.audio_fifo_path)
+            if os.path.exists(self.alsa_config_path):
+                os.remove(self.alsa_config_path)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup audio files: {e}")
 
 
 class RetroArchInstance:
@@ -497,9 +687,25 @@ class RetroArchInstance:
     async def start_retroarch(self):
         """Launch RetroArch process"""
         try:
-            # Set environment for Xvfb display
+            # Create media source first to setup FIFO and ALSA config
+            # This must happen before RetroArch starts so it can use the FIFO
+            self.media_source = RetroArchMediaSource(
+                self.display_num,
+                self.session_id,
+                self.width,
+                self.height
+            )
+            self.media_source.setup_audio_fifo()
+
+            # CRITICAL: Open FIFO for reading BEFORE RetroArch starts!
+            # Otherwise RetroArch will block trying to open the FIFO for writing
+            self.media_source.open_audio_fifo()
+
+            # Set environment for Xvfb display and ALSA config
             env = os.environ.copy()
             env["DISPLAY"] = f":{self.display_num}"
+            # Add ALSA config path so RetroArch uses our custom config
+            env.update(self.media_source.get_alsa_env())
 
             # Create persistent directory for RetroArch config
             config_dir = Path("/tmp/retroarch_config")
@@ -530,8 +736,11 @@ class RetroArchInstance:
                 f.write("network_cmd_port = \"55355\"\n")
                 f.write("stdin_cmd_enable = \"true\"\n")
 
-                # Audio configuration for ALSA
+                # Audio configuration via ALSA file plugin (writes to session-specific FIFO)
+                # The device name is defined in the custom ALSA config file
+                audio_device = self.media_source.get_audio_device()
                 f.write("audio_driver = \"alsa\"\n")
+                f.write(f'audio_device = "{audio_device}"\n')
                 f.write("audio_enable = \"true\"\n")
                 f.write("audio_sync = \"true\"\n")
 
@@ -576,7 +785,7 @@ class RetroArchInstance:
                     pass
                 return False
 
-            logger.info(f"Started RetroArch for session {self.session_id} (PID: {self.retroarch_process.pid})")
+            logger.info(f"Started RetroArch for session {self.session_id} (PID: {self.retroarch_process.pid}) with audio device {audio_device}")
 
             # Don't block waiting for core options - let the watcher handle it asynchronously
             logger.info(f"Core options will be loaded asynchronously for {self.core}")
@@ -590,12 +799,16 @@ class RetroArchInstance:
     async def start_streaming(self):
         """Start FFmpeg capture and prepare for WebRTC"""
         try:
-            self.media_source = RetroArchMediaSource(
-                self.display_num,
-                self.session_id,
-                self.width,
-                self.height
-            )
+            # Media source was already created in start_retroarch
+            if not self.media_source:
+                self.media_source = RetroArchMediaSource(
+                    self.display_num,
+                    self.session_id,
+                    self.width,
+                    self.height
+                )
+                self.media_source.setup_audio_fifo()
+
             await self.media_source.start()
             logger.info(f"Started streaming for session {self.session_id}")
             return True
