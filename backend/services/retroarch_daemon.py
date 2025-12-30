@@ -736,13 +736,17 @@ class RetroArchInstance:
                 f.write("network_cmd_port = \"55355\"\n")
                 f.write("stdin_cmd_enable = \"true\"\n")
 
+                # Frame timing: Xvfb has no real vsync, so we use frame_delay to throttle
+                # 16ms delay = ~60fps cap (prevents game from running too fast)
+                f.write("video_frame_delay = \"16\"\n")
+                f.write("video_vsync = \"false\"\n")
+
                 # Audio configuration via ALSA file plugin (writes to session-specific FIFO)
                 # The device name is defined in the custom ALSA config file
                 audio_device = self.media_source.get_audio_device()
                 f.write("audio_driver = \"alsa\"\n")
                 f.write(f'audio_device = "{audio_device}"\n')
                 f.write("audio_enable = \"true\"\n")
-                f.write("audio_sync = \"true\"\n")
 
                 # Force core options to be saved to persistent location
                 f.write(f'core_options_path = "{core_options_path}"\n')
