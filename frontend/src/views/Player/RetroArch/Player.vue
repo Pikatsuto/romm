@@ -82,6 +82,9 @@ function handlePointerLockChange() {
   isPointerLocked.value = document.pointerLockElement === videoRef.value;
 }
 
+// Store ICE servers from backend for WebRTC
+const iceServersFromBackend = ref<RTCIceServer[]>([]);
+
 async function startSession() {
   try {
     statusMessage.value = "Starting RetroArch session...";
@@ -104,6 +107,17 @@ async function startSession() {
     sessionId.value = data.session_id;
     touchscreenRegion.value = data.touchscreen_region || null;
     coreOptions.value = data.core_options || {};
+
+    // Store ICE servers from backend (includes TURN if configured)
+    if (data.ice_servers && data.ice_servers.length > 0) {
+      iceServersFromBackend.value = data.ice_servers.map((server: any) => ({
+        urls: server.urls,
+        username: server.username || undefined,
+        credential: server.credential || undefined,
+      }));
+      console.log("[RetroArch] ICE servers from backend:", iceServersFromBackend.value.length);
+    }
+
     console.log("[RetroArch] Session created:", sessionId.value);
     if (touchscreenRegion.value) {
       console.log("[RetroArch] Touchscreen region:", touchscreenRegion.value);
@@ -112,13 +126,15 @@ async function startSession() {
       console.log(`[RetroArch] Core options loaded: ${Object.keys(coreOptions.value).length} options`);
     }
 
+    statusMessage.value = "Connecting to signaling server...";
+
+    // 2. Connect SocketIO first and wait for connection
+    await connectSocket();
+
     statusMessage.value = "Setting up WebRTC connection...";
 
-    // 2. Setup WebRTC
+    // 3. Setup WebRTC after socket is connected
     await setupWebRTC(data.webrtc_offer);
-
-    // 3. Connect SocketIO for signaling
-    connectSocket();
 
     statusMessage.value = "Connected! Starting stream...";
     isLoading.value = false;
@@ -146,11 +162,22 @@ async function startSession() {
 }
 
 async function setupWebRTC(offerSdp: string) {
-  const iceServers = config.value.EJS_NETPLAY_ICE_SERVERS || [
-    { urls: "stun:stun.l.google.com:19302" },
-  ];
+  // Use ICE servers from backend (includes TURN if configured), fallback to config or STUN
+  const iceServers: RTCIceServer[] = iceServersFromBackend.value.length > 0
+    ? iceServersFromBackend.value
+    : config.value.EJS_NETPLAY_ICE_SERVERS || [{ urls: "stun:stun.l.google.com:19302" }];
 
-  const pc = new RTCPeerConnection({ iceServers });
+  console.log("[RetroArch] Using ICE servers:", JSON.stringify(iceServers, null, 2));
+
+  // Test TURN connectivity before starting WebRTC
+  if (iceServers.some(s => s.urls && s.urls.toString().includes("turn:"))) {
+    console.log("[RetroArch] TURN servers configured, checking connectivity...");
+  }
+
+  const pc = new RTCPeerConnection({
+    iceServers,
+    iceCandidatePoolSize: 10,  // Pre-allocate candidates for faster gathering
+  });
   peerConnection.value = pc;
 
   // Receive video/audio stream
@@ -167,12 +194,28 @@ async function setupWebRTC(offerSdp: string) {
   // Handle ICE candidates
   pc.onicecandidate = (event) => {
     if (event.candidate && socket.value && sessionId.value) {
-      console.log("[RetroArch] Sending ICE candidate");
+      const candidateStr = event.candidate.candidate;
+      const candidateType = candidateStr.includes("typ relay") ? "relay" :
+                            candidateStr.includes("typ srflx") ? "srflx" :
+                            candidateStr.includes("typ host") ? "host" : "unknown";
+      console.log(`[RetroArch] ICE candidate (${candidateType}):`, candidateStr.substring(0, 80));
       socket.value.emit("retroarch-ice-candidate", {
         session_id: sessionId.value,
         candidate: event.candidate.toJSON(),
       });
+    } else if (event.candidate === null) {
+      console.log("[RetroArch] ICE gathering complete");
     }
+  };
+
+  // ICE gathering state changes
+  pc.onicegatheringstatechange = () => {
+    console.log("[RetroArch] ICE gathering state:", pc.iceGatheringState);
+  };
+
+  // ICE connection state changes
+  pc.oniceconnectionstatechange = () => {
+    console.log("[RetroArch] ICE connection state:", pc.iceConnectionState);
   };
 
   // Connection state changes
@@ -202,39 +245,50 @@ async function setupWebRTC(offerSdp: string) {
   }
 }
 
-function connectSocket() {
-  socket.value = io({
-    path: "/netplay/socket.io",
-    transports: ["websocket"],
-  });
+function connectSocket(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    socket.value = io({
+      path: "/netplay/socket.io",
+      transports: ["websocket"],
+    });
 
-  socket.value.on("connect", () => {
-    console.log("[RetroArch] SocketIO connected");
+    const timeout = setTimeout(() => {
+      reject(new Error("Socket connection timeout"));
+    }, 10000);
 
-    // Join the session room to receive targeted events
-    if (sessionId.value) {
-      socket.value?.emit("join", sessionId.value);
-      console.log(`[RetroArch] Joined room: ${sessionId.value}`);
-    }
-  });
+    socket.value.on("connect", () => {
+      clearTimeout(timeout);
+      console.log("[RetroArch] SocketIO connected");
 
-  socket.value.on("disconnect", () => {
-    console.log("[RetroArch] SocketIO disconnected");
-  });
+      // Join the session room to receive targeted events
+      if (sessionId.value) {
+        socket.value?.emit("join", sessionId.value);
+        console.log(`[RetroArch] Joined room: ${sessionId.value}`);
+      }
 
-  socket.value.on("connect_error", (err: Error) => {
-    console.error("[RetroArch] SocketIO connection error:", err);
-  });
+      resolve();
+    });
 
-  // Listen for core options updates from backend
-  socket.value.on("retroarch-core-options-ready", (data: { session_id: string; core_options: Record<string, string> }) => {
-    console.log(`[RetroArch] Core options ready:`, data.core_options);
+    socket.value.on("disconnect", () => {
+      console.log("[RetroArch] SocketIO disconnected");
+    });
 
-    if (data.session_id === sessionId.value) {
-      // Update the core options ref
-      coreOptions.value = data.core_options;
-      console.log(`[RetroArch] Updated ${Object.keys(data.core_options).length} core options dynamically`);
-    }
+    socket.value.on("connect_error", (err: Error) => {
+      clearTimeout(timeout);
+      console.error("[RetroArch] SocketIO connection error:", err);
+      reject(err);
+    });
+
+    // Listen for core options updates from backend
+    socket.value.on("retroarch-core-options-ready", (data: { session_id: string; core_options: Record<string, string> }) => {
+      console.log(`[RetroArch] Core options ready:`, data.core_options);
+
+      if (data.session_id === sessionId.value) {
+        // Update the core options ref
+        coreOptions.value = data.core_options;
+        console.log(`[RetroArch] Updated ${Object.keys(data.core_options).length} core options dynamically`);
+      }
+    });
   });
 }
 
