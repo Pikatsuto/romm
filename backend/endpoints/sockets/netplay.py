@@ -246,20 +246,29 @@ async def retroarch_ice_candidate(sid: str, data: dict):
         data: Contains session_id and candidate information
     """
     from handler.redis_handler import async_cache
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     session_id = data.get("session_id")
     candidate = data.get("candidate")
 
+    logger.info(f"[ICE] Received ICE candidate from browser for session {session_id}: {candidate}")
+
     if not session_id or not candidate:
+        logger.warning(f"[ICE] Missing session_id or candidate: session_id={session_id}, candidate={candidate}")
         return
 
     # Publish to Redis for daemon to consume
     import json
 
+    channel = f"retroarch:ice:{session_id}"
+    logger.info(f"[ICE] Publishing to Redis channel {channel}")
     await async_cache.publish(
-        f"retroarch:ice:{session_id}",
+        channel,
         json.dumps({"sid": sid, "candidate": candidate}),
     )
+    logger.info(f"[ICE] Published ICE candidate to Redis")
 
 
 @netplay_socket_handler.socket_server.on("retroarch-input")  # type: ignore

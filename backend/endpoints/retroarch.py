@@ -5,6 +5,7 @@ This module provides REST API endpoints for managing RetroArch streaming session
 
 import json
 import logging
+import os
 import uuid
 from typing import Annotated
 
@@ -51,6 +52,14 @@ class TouchscreenRegion(BaseModel):
     height: float    # Ratio 0.0-1.0
 
 
+class IceServer(BaseModel):
+    """ICE server configuration for WebRTC."""
+
+    urls: str | list[str]
+    username: str | None = None
+    credential: str | None = None
+
+
 class StartSessionResponse(BaseModel):
     """Response containing session ID and WebRTC offer."""
 
@@ -58,6 +67,7 @@ class StartSessionResponse(BaseModel):
     webrtc_offer: str
     touchscreen_region: TouchscreenRegion | None = None  # Only for cores with touchscreen
     core_options: dict[str, str] = {}  # Core-specific options loaded from RetroArch
+    ice_servers: list[IceServer] = []  # ICE servers (STUN/TURN) for WebRTC
 
 
 class AnswerSessionRequest(BaseModel):
@@ -223,11 +233,42 @@ async def start_stream(
                 except json.JSONDecodeError as e:
                     log.warning(f"Failed to parse core options: {e}")
 
+            # Build ICE servers list from environment variables
+            ice_servers = []
+
+            # Always add STUN server
+            stun_server = os.getenv("RETROARCH_STUN_SERVER", "stun:stun.l.google.com:19302")
+            ice_servers.append(IceServer(urls=stun_server))
+            log.debug(f"STUN server: {stun_server}")
+
+            # Add integrated coturn TURN server if available
+            # These env vars are set by entrypoint.sh when coturn starts
+            turn_host = os.getenv("RETROARCH_TURN_EXTERNAL_HOST")
+            turn_user = os.getenv("RETROARCH_TURN_USER")
+            turn_password = os.getenv("RETROARCH_TURN_PASSWORD")
+            turn_port = os.getenv("RETROARCH_TURN_PORT", "3478")
+
+            log.info(f"TURN config: host={turn_host}, user={turn_user}, port={turn_port}, password={'set' if turn_password else 'not set'}")
+
+            if turn_host and turn_user and turn_password:
+                # Add TURN server with both UDP and TCP transports in a single entry
+                # Using array of URLs is more compatible with browsers
+                ice_servers.append(IceServer(
+                    urls=[
+                        f"turn:{turn_host}:{turn_port}",
+                        f"turn:{turn_host}:{turn_port}?transport=tcp",
+                    ],
+                    username=turn_user,
+                    credential=turn_password,
+                ))
+                log.info(f"Added integrated TURN server: turn:{turn_host}:{turn_port} with credentials user={turn_user}")
+
             return StartSessionResponse(
                 session_id=session_id,
                 webrtc_offer=updated_session.webrtc_offer,
                 touchscreen_region=touchscreen_region,
                 core_options=core_options,
+                ice_servers=ice_servers,
             )
 
         # Check for error state
