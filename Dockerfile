@@ -32,17 +32,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libncursesw5-dev \
     xvfb \
     retroarch \
-    ffmpeg \
     netcat-openbsd \
     xdotool \
     x11-xserver-utils \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
     libsdl2-2.0-0 \
-    alsa-utils \
-    libasound2 \
-    libasound2-plugins \
+    pulseaudio \
+    pulseaudio-utils \
+    dbus \
     unzip \
+    # GStreamer for WebRTC streaming
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-pulseaudio \
+    gstreamer1.0-x \
+    gstreamer1.0-nice \
+    # TURN server for WebRTC NAT traversal
+    coturn \
+    # PyGObject build dependencies
+    libcairo2-dev \
+    libgirepository1.0-dev \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    gir1.2-gst-plugins-bad-1.0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

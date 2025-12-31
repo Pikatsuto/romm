@@ -17,6 +17,13 @@ services:
       - "5173:5173" # Vite dev server (default)
       - "8443:8443" # HTTPS dev server
       - "${DEV_PORT:-5000}:5000" # Backend API
+      # WebRTC UDP ports for GStreamer direct connection
+      - "10000-10020:10000-10020/udp"
+      # TURN server for WebRTC NAT traversal
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      # TURN relay ports (for relayed media when direct connection fails)
+      - "10100-10120:10100-10120/udp"
     volumes:
       - ./backend:/app/backend
       - /app/backend/romm_mock # Empty directory
@@ -30,6 +37,12 @@ services:
       - romm-valkey-dev
       - romm-postgres-dev
     command: /bin/bash -c "cd /app && bash"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
 
