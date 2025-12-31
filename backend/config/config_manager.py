@@ -34,11 +34,24 @@ SQLITE_DB_BASE_PATH: Final = f"{ROMM_BASE_PATH}/database"
 
 
 class EjsControlsButton(TypedDict):
+    """EmulatorJS controller button mapping.
+
+    Attributes:
+        value: Keyboard key binding for this button.
+        value2: Controller button binding for this button.
+    """
+
     value: NotRequired[str]  # Keyboard key
     value2: NotRequired[str]  # Controller button
 
 
 class MetadataMediaType(enum.StrEnum):
+    """Supported media types for ROM metadata and artwork.
+
+    These values correspond to different types of visual assets
+    that can be associated with ROMs during scanning.
+    """
+
     BEZEL = "bezel"
     BOX2D = "box2d"
     BOX2D_BACK = "box2d_back"
@@ -55,6 +68,18 @@ class MetadataMediaType(enum.StrEnum):
 
 
 class EjsControls(TypedDict):
+    """EmulatorJS controller configuration for up to 4 players.
+
+    Each player slot (_0 through _3) maps button numbers to their bindings.
+    Button numbers are core-specific and correspond to the emulator's input map.
+
+    Attributes:
+        _0: Player 1 button mappings.
+        _1: Player 2 button mappings.
+        _2: Player 3 button mappings.
+        _3: Player 4 button mappings.
+    """
+
     _0: dict[int, EjsControlsButton]  # button_number -> EjsControlsButton
     _1: dict[int, EjsControlsButton]
     _2: dict[int, EjsControlsButton]
@@ -65,12 +90,39 @@ EjsOption = dict[str, str]  # option_name -> option_value
 
 
 class NetplayICEServer(TypedDict):
+    """ICE server configuration for WebRTC netplay.
+
+    Used to configure STUN/TURN servers for peer-to-peer connections
+    in EmulatorJS netplay mode.
+
+    Attributes:
+        urls: STUN or TURN server URL (e.g., 'stun:stun.example.com:3478').
+        username: Username for TURN authentication (optional for STUN).
+        credential: Password for TURN authentication (optional for STUN).
+    """
+
     urls: str
     username: NotRequired[str]
     credential: NotRequired[str]
 
 
 class Config:
+    """Application configuration container.
+
+    Holds all configuration values loaded from config.yml and environment
+    variables. Values are set during initialization by ConfigManager.
+
+    Attributes:
+        CONFIG_FILE_MOUNTED: Whether the config.yml file exists.
+        CONFIG_FILE_WRITABLE: Whether the config.yml file is writable.
+        EXCLUDED_PLATFORMS: List of platform slugs to exclude from scanning.
+        ROMS_FOLDER_NAME: Name of the ROMs folder in the library.
+        RETROARCH_ENABLED: Whether RetroArch streaming is enabled.
+        RETROARCH_MAX_SESSIONS: Maximum concurrent streaming sessions.
+        RETROARCH_CORES_PATH: Path to libretro cores directory.
+        RETROARCH_PLATFORM_CORES: Mapping of platform slugs to core names.
+    """
+
     CONFIG_FILE_MOUNTED: bool
     CONFIG_FILE_WRITABLE: bool
     EXCLUDED_PLATFORMS: list[str]
@@ -104,6 +156,11 @@ class Config:
     SCAN_MEDIA: list[str]
 
     def __init__(self, **entries):
+        """Initialize Config with the given entries.
+
+        Args:
+            **entries: Configuration key-value pairs to set as attributes.
+        """
         self.__dict__.update(entries)
         self.HIGH_PRIO_STRUCTURE_PATH = f"{LIBRARY_BASE_PATH}/{self.ROMS_FOLDER_NAME}"
 
@@ -320,7 +377,14 @@ class ConfigManager:
         )
 
     def _get_ejs_controls(self) -> dict[str, EjsControls]:
-        """Get EJS controls with default player entries for each core"""
+        """Get EJS controls with default player entries for each core.
+
+        Parses the emulatorjs.controls section from config.yml and converts
+        it to the EjsControls TypedDict format with player slots _0 through _3.
+
+        Returns:
+            Dictionary mapping core names to their control configurations.
+        """
         raw_controls = pydash.get(self._raw_config, "emulatorjs.controls", {})
         controls = {}
 
@@ -338,7 +402,14 @@ class ConfigManager:
     def _format_ejs_controls_for_yaml(
         self,
     ) -> dict[str, dict[int, dict[int, EjsControlsButton]]]:
-        """Format EJS controls back to YAML structure for saving"""
+        """Format EJS controls back to YAML structure for saving.
+
+        Converts the internal EjsControls format (with _0, _1, etc. keys)
+        back to the YAML-friendly format (with 0, 1, etc. integer keys).
+
+        Returns:
+            Dictionary suitable for YAML serialization.
+        """
         yaml_controls = {}
 
         for core, controls in self.config.EJS_CONTROLS.items():
@@ -352,7 +423,14 @@ class ConfigManager:
         return yaml_controls
 
     def _validate_config(self):
-        """Validates the config.yml file"""
+        """Validate the parsed configuration values.
+
+        Checks that all configuration values have the expected types and
+        valid values. Exits the application with an error if validation fails.
+
+        Raises:
+            SystemExit: If any configuration value is invalid.
+        """
         if not isinstance(self.config.EXCLUDED_PLATFORMS, list):
             log.critical("Invalid config.yml: exclude.platforms must be a list")
             sys.exit(3)
@@ -531,6 +609,14 @@ class ConfigManager:
                 sys.exit(3)
 
     def get_config(self) -> Config:
+        """Get the current configuration, reloading from file if available.
+
+        Re-reads the config.yml file to pick up any changes, then parses
+        and validates the configuration before returning.
+
+        Returns:
+            The current Config object with all settings.
+        """
         try:
             with open(self.config_file, "r") as config_file:
                 self._raw_config = yaml.load(config_file, Loader=SafeLoader) or {}
@@ -543,6 +629,14 @@ class ConfigManager:
         return self.config
 
     def _update_config_file(self) -> None:
+        """Write the current configuration to the config.yml file.
+
+        Converts all config values back to YAML format and saves them.
+        Creates the config directory if it doesn't exist.
+
+        Raises:
+            ConfigNotWritableException: If the config file is not writable.
+        """
         if not self._config_file_writable:
             log.warning("Config file not writable, skipping config file update")
             raise ConfigNotWritableException
@@ -605,6 +699,14 @@ class ConfigManager:
             raise ConfigNotWritableException from exc
 
     def add_platform_binding(self, fs_slug: str, slug: str) -> None:
+        """Add a filesystem to platform slug binding.
+
+        Maps a folder name in the library to a specific platform identifier.
+
+        Args:
+            fs_slug: Filesystem folder name (e.g., 'nintendo-64').
+            slug: Platform identifier (e.g., 'n64').
+        """
         platform_bindings = self.config.PLATFORMS_BINDING
         if fs_slug in platform_bindings:
             log.warning(f"Binding for {hl(fs_slug)} already exists")
@@ -615,6 +717,11 @@ class ConfigManager:
         self._update_config_file()
 
     def remove_platform_binding(self, fs_slug: str) -> None:
+        """Remove a filesystem to platform slug binding.
+
+        Args:
+            fs_slug: Filesystem folder name to remove from bindings.
+        """
         platform_bindings = self.config.PLATFORMS_BINDING
 
         try:
@@ -626,6 +733,14 @@ class ConfigManager:
         self._update_config_file()
 
     def add_platform_version(self, fs_slug: str, slug: str) -> None:
+        """Add a platform version binding.
+
+        Maps a folder name to a specific version/variant of a platform.
+
+        Args:
+            fs_slug: Filesystem folder name.
+            slug: Version identifier.
+        """
         platform_versions = self.config.PLATFORMS_VERSIONS
         if fs_slug in platform_versions:
             log.warning(f"Version for {hl(fs_slug)} already exists")
@@ -636,6 +751,11 @@ class ConfigManager:
         self._update_config_file()
 
     def remove_platform_version(self, fs_slug: str) -> None:
+        """Remove a platform version binding.
+
+        Args:
+            fs_slug: Filesystem folder name to remove from version bindings.
+        """
         platform_versions = self.config.PLATFORMS_VERSIONS
 
         try:
@@ -647,6 +767,12 @@ class ConfigManager:
         self._update_config_file()
 
     def add_exclusion(self, exclusion_type: str, exclusion_value: str):
+        """Add an exclusion rule for scanning.
+
+        Args:
+            exclusion_type: Config attribute name (e.g., 'EXCLUDED_PLATFORMS').
+            exclusion_value: Value to add to the exclusion list.
+        """
         config_item = self.config.__getattribute__(exclusion_type)
         if exclusion_value in config_item:
             log.warning(
@@ -659,6 +785,12 @@ class ConfigManager:
         self._update_config_file()
 
     def remove_exclusion(self, exclusion_type: str, exclusion_value: str):
+        """Remove an exclusion rule from scanning.
+
+        Args:
+            exclusion_type: Config attribute name (e.g., 'EXCLUDED_PLATFORMS').
+            exclusion_value: Value to remove from the exclusion list.
+        """
         config_item = self.config.__getattribute__(exclusion_type)
 
         try:

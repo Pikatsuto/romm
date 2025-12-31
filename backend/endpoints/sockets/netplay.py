@@ -1,3 +1,12 @@
+"""Socket.IO event handlers for netplay and RetroArch streaming.
+
+This module provides real-time communication via Socket.IO for:
+- EmulatorJS netplay room management (create, join, leave rooms)
+- WebRTC signaling for peer-to-peer connections
+- RetroArch streaming input, commands, and ICE candidate exchange
+- Core options synchronization for RetroArch sessions
+"""
+
 import asyncio
 from typing import Any, NotRequired, TypedDict
 
@@ -24,6 +33,15 @@ class RoomData(TypedDict):
 
 @netplay_socket_handler.socket_server.on("open-room")  # type: ignore
 async def open_room(sid: str, data: RoomData):
+    """Create a new netplay room.
+
+    Args:
+        sid: Socket ID of the room creator.
+        data: Room configuration including session ID, player info, and settings.
+
+    Returns:
+        Error message string if creation fails, None on success.
+    """
     extra_data = data["extra"]
 
     session_id = extra_data.get("sessionid")
@@ -69,6 +87,15 @@ async def open_room(sid: str, data: RoomData):
 
 @netplay_socket_handler.socket_server.on("join-room")  # type: ignore
 async def join_room(sid: str, data: RoomData):
+    """Join an existing netplay room.
+
+    Args:
+        sid: Socket ID of the joining player.
+        data: Room join data including session ID, player info, and password.
+
+    Returns:
+        Tuple of (None, players dict) on success, or error message string on failure.
+    """
     extra_data = data["extra"]
 
     session_id = extra_data.get("sessionid")
@@ -113,6 +140,16 @@ async def join_room(sid: str, data: RoomData):
 
 
 async def _handle_leave(sid: str, session_id: str, player_id: str):
+    """Handle player leaving a netplay room.
+
+    Removes the player from the room, transfers ownership if needed,
+    and deletes the room if it becomes empty.
+
+    Args:
+        sid: Socket ID of the leaving player.
+        session_id: Room session identifier.
+        player_id: Identifier of the leaving player.
+    """
     current_room = await netplay_handler.get(session_id)
     if not current_room:
         return
@@ -147,6 +184,11 @@ async def join(sid: str, session_id: str):
 
 @netplay_socket_handler.socket_server.on("leave-room")  # type: ignore
 async def leave_room(sid: str):
+    """Handle player leaving their current netplay room.
+
+    Args:
+        sid: Socket ID of the leaving player.
+    """
     stored_session = await netplay_socket_handler.socket_server.get_session(sid)
     session_id = stored_session.get("session_id")
     player_id = stored_session.get("player_id")
@@ -166,6 +208,15 @@ class WebRTCSignalData(TypedDict, total=False):
 
 @netplay_socket_handler.socket_server.on("webrtc-signal")  # type: ignore
 async def webrtc_signal(sid: str, data: WebRTCSignalData):
+    """Forward WebRTC signaling messages between peers.
+
+    Handles ICE candidates, SDP offers/answers, and renegotiation requests
+    for establishing peer-to-peer WebRTC connections in netplay.
+
+    Args:
+        sid: Socket ID of the sender.
+        data: Signaling data including target peer and WebRTC payloads.
+    """
     target = data.get("target")
     request_renegotiate = data.get("requestRenegotiate", False)
 
@@ -194,11 +245,17 @@ async def webrtc_signal(sid: str, data: WebRTCSignalData):
 
 @netplay_socket_handler.socket_server.on("webrtc-signal-error")  # type: ignore
 async def webrtc_signal_error(_sid: str, _error: str, _data: Any):
+    """Handle WebRTC signaling errors (no-op handler for logging purposes)."""
     pass
 
 
 @netplay_socket_handler.socket_server.on("disconnect")  # type: ignore
 async def disconnect(sid: str):
+    """Handle socket disconnection and cleanup player from any active room.
+
+    Args:
+        sid: Socket ID of the disconnected client.
+    """
     stored_session = await netplay_socket_handler.socket_server.get_session(sid)
     session_id = stored_session.get("session_id")
     player_id = stored_session.get("player_id")
@@ -208,6 +265,13 @@ async def disconnect(sid: str):
 
 
 async def _broadcast_to_room(sid: str, event: str, data: Any):
+    """Broadcast an event to all players in the sender's room except the sender.
+
+    Args:
+        sid: Socket ID of the sender (excluded from broadcast).
+        event: Event name to emit.
+        data: Event payload data.
+    """
     stored_session = await netplay_socket_handler.socket_server.get_session(sid)
     session_id = stored_session.get("session_id")
     if session_id:
@@ -218,16 +282,19 @@ async def _broadcast_to_room(sid: str, event: str, data: Any):
 
 @netplay_socket_handler.socket_server.on("data-message")  # type: ignore
 async def data_message(sid: str, data: Any):
+    """Broadcast a data message to all players in the room."""
     await _broadcast_to_room(sid, "data-message", data)
 
 
 @netplay_socket_handler.socket_server.on("snapshot")  # type: ignore
 async def snapshot(sid: str, data: Any):
+    """Broadcast an emulator state snapshot to all players in the room."""
     await _broadcast_to_room(sid, "snapshot", data)
 
 
 @netplay_socket_handler.socket_server.on("input")  # type: ignore
 async def input(sid: str, data: Any):
+    """Broadcast input events to all players in the room."""
     await _broadcast_to_room(sid, "input", data)
 
 

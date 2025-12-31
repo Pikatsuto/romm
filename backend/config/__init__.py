@@ -1,3 +1,19 @@
+"""RomM configuration module.
+
+This module loads and exposes all configuration values from environment variables.
+Configuration is organized into logical sections:
+
+- Server: Base URL, ports, development mode settings
+- Paths: File system paths for ROMs, resources, assets
+- Database: Connection parameters for MariaDB/MySQL/PostgreSQL
+- Redis: Cache and session storage configuration
+- External APIs: IGDB, MobyGames, ScreenScraper, SteamGridDB, RetroAchievements
+- Authentication: Secret keys, session settings, OIDC configuration
+- Tasks: Scheduled task settings and cron expressions
+- Emulation: EmulatorJS, Ruffle, RetroArch streaming settings
+- Logging: Log level and color settings
+"""
+
 import os
 from typing import Final, overload
 

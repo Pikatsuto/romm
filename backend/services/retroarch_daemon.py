@@ -21,18 +21,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from gi.repository import Gst, GstWebRTC, GstSdp, GLib
+
+from config.config_manager import config_manager
+from handler.retroarch_handler import retroarch_handler, RetroArchSession
+from handler.retroarch_handler import SessionState
+from handler.database import db_rom_handler
+from handler.redis_handler import async_cache
 
 # GStreamer imports
 import gi
 gi.require_version('Gst', '1.0')
 gi.require_version('GstWebRTC', '1.0')
 gi.require_version('GstSdp', '1.0')
-from gi.repository import Gst, GstWebRTC, GstSdp, GLib
-
-from config.config_manager import config_manager
-from handler.retroarch_handler import retroarch_handler, RetroArchSession, SessionState
-from handler.database import db_rom_handler
-from handler.redis_handler import async_cache
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,22 @@ STANDARD_RESOLUTIONS = [
 ]
 
 
-def calculate_optimal_resolution(screen_width: int, screen_height: int, max_resolution: str | None = None) -> tuple[int, int]:
-    """Calculate optimal Xvfb resolution based on screen dimensions."""
+def calculate_optimal_resolution(
+    screen_width: int, screen_height: int, max_resolution: str | None = None,
+) -> tuple[int, int]:
+    """Calculate optimal Xvfb resolution based on screen dimensions.
+
+    Selects the largest standard resolution that fits within the client's
+    screen dimensions, respecting an optional maximum resolution cap.
+
+    Args:
+        screen_width: Client screen width in pixels.
+        screen_height: Client screen height in pixels.
+        max_resolution: Optional maximum resolution in "WxH" format (e.g., "1920x1080").
+
+    Returns:
+        Tuple of (width, height) for the optimal Xvfb display resolution.
+    """
     max_width = None
     max_height = None
     if max_resolution:
@@ -86,7 +101,8 @@ def calculate_optimal_resolution(screen_width: int, screen_height: int, max_reso
                 max_width = int(parts[0])
                 max_height = int(parts[1])
         except (ValueError, IndexError):
-            logger.warning(f"Invalid max resolution format: {max_resolution}, ignoring")
+            msg = f"Invalid max resolution format: {max_resolution}, ignoring"
+            logger.warning(msg)
 
     is_portrait = screen_height > screen_width
 
@@ -127,7 +143,14 @@ def calculate_optimal_resolution(screen_width: int, screen_height: int, max_reso
 
 @dataclass
 class XvfbDisplay:
-    """Represents an Xvfb virtual display"""
+    """Represents an Xvfb virtual display.
+
+    Attributes:
+        display_number: X11 display number (e.g., 99 for :99).
+        process: The Xvfb subprocess handle.
+        in_use: Whether the display is currently allocated to a session.
+    """
+
     display_number: int
     process: subprocess.Popen
     in_use: bool = False
@@ -142,73 +165,86 @@ class XvfbManager:
         self.displays: dict[int, XvfbDisplay] = {}
         self.lock = asyncio.Lock()
 
-    async def allocate_display(self, width: int = 1280, height: int = 720) -> Optional[int]:
-        """Allocate an available Xvfb display with specified resolution"""
-        async with self.lock:
-            for display_num, display in self.displays.items():
-                if not display.in_use and display.process.poll() is None:
-                    display.in_use = True
-                    logger.info(f"Reusing Xvfb display :{display_num}")
-                    return display_num
+    def _find_reusable_display(self) -> Optional[int]:
+        """Find an existing display that can be reused."""
+        for display_num, display in self.displays.items():
+            not_in_use = not display.in_use
+            is_available = not_in_use and display.process.poll() is None
+            if is_available:
+                display.in_use = True
+                logger.info(f"Reusing Xvfb display :{display_num}")
+                return display_num
+        return None
 
-            if len(self.displays) < self.max_displays:
-                display_num = self.start_display + len(self.displays)
+    def _create_xvfb_process(self, display_num: int, width: int, height: int):
+        """Create a new Xvfb process."""
+        cmd = [
+            "Xvfb", f":{display_num}",
+            "-screen", "0", f"{width}x{height}x24",
+            "-ac", "-nolisten", "tcp",
+            "+extension", "GLX", "+render", "-noreset",
+        ]
+        return subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
 
-                try:
-                    process = subprocess.Popen(
-                        [
-                            "Xvfb",
-                            f":{display_num}",
-                            "-screen", "0", f"{width}x{height}x24",
-                            "-ac",
-                            "-nolisten", "tcp",
-                            "+extension", "GLX",
-                            "+render",
-                            "-noreset",
-                        ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-
-                    await asyncio.sleep(0.2)
-
-                    if process.poll() is not None:
-                        logger.error(f"Xvfb display :{display_num} failed to start")
-                        return None
-
-                    display = XvfbDisplay(
-                        display_number=display_num,
-                        process=process,
-                        in_use=True,
-                    )
-                    self.displays[display_num] = display
-
-                    logger.info(f"Created new Xvfb display :{display_num} with resolution {width}x{height}")
-                    return display_num
-
-                except Exception as e:
-                    logger.error(f"Failed to create Xvfb display: {e}")
-                    return None
-
+    async def _create_new_display(
+        self, width: int, height: int,
+    ) -> Optional[int]:
+        """Create a new Xvfb display."""
+        if len(self.displays) >= self.max_displays:
             logger.warning("No available Xvfb displays")
             return None
 
+        display_num = self.start_display + len(self.displays)
+        try:
+            process = self._create_xvfb_process(display_num, width, height)
+            await asyncio.sleep(0.2)
+
+            if process.poll() is not None:
+                logger.error(f"Xvfb display :{display_num} failed to start")
+                return None
+
+            self.displays[display_num] = XvfbDisplay(
+                display_number=display_num, process=process, in_use=True,
+            )
+            res = f"{width}x{height}"
+            logger.info(f"Created Xvfb display :{display_num} ({res})")
+            return display_num
+
+        except Exception as e:
+            logger.error(f"Failed to create Xvfb display: {e}")
+            return None
+
+    async def allocate_display(self, width: int = 1280, height: int = 720):
+        """Allocate an available Xvfb display with specified resolution."""
+        async with self.lock:
+            reused = self._find_reusable_display()
+            if reused is not None:
+                return reused
+            return await self._create_new_display(width, height)
+
     async def release_display(self, display_num: int):
-        """Mark display as available for reuse"""
+        """Mark display as available for reuse."""
         async with self.lock:
             if display_num in self.displays:
                 self.displays[display_num].in_use = False
 
+    def _terminate_display(self, display: XvfbDisplay):
+        """Terminate a single display process."""
+        if display.process.poll() is not None:
+            return
+        display.process.terminate()
+        try:
+            display.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            display.process.kill()
+
     async def cleanup_all(self):
-        """Terminate all Xvfb processes"""
+        """Terminate all Xvfb processes."""
         async with self.lock:
             for display in self.displays.values():
-                if display.process.poll() is None:
-                    display.process.terminate()
-                    try:
-                        display.process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        display.process.kill()
+                self._terminate_display(display)
             self.displays.clear()
             logger.info("Cleaned up all Xvfb displays")
 
@@ -233,6 +269,15 @@ class GStreamerWebRTC:
         height: int,
         fps: int = 60,
     ):
+        """Initialize GStreamer WebRTC streaming.
+
+        Args:
+            session_id: Unique session identifier for this stream.
+            display_num: X11 display number to capture from.
+            width: Video capture width in pixels.
+            height: Video capture height in pixels.
+            fps: Target frame rate for video capture (default: 60).
+        """
         self.session_id = session_id
         self.display_num = display_num
         self.width = width
@@ -246,7 +291,8 @@ class GStreamerWebRTC:
         # TURN server configuration from environment
         # Format: turn://username:password@host:port or turns://... for TLS
         self.turn_server = os.getenv("RETROARCH_TURN_SERVER")
-        self.stun_server = os.getenv("RETROARCH_STUN_SERVER", "stun://stun.l.google.com:19302")
+        default_stun = "stun://stun.l.google.com:19302"
+        self.stun_server = os.getenv("RETROARCH_STUN_SERVER", default_stun)
 
         self.pipeline: Optional[Gst.Pipeline] = None
         self.webrtcbin: Optional[Gst.Element] = None
@@ -258,48 +304,43 @@ class GStreamerWebRTC:
         self._offer_ready = threading.Event()
         self._ice_gathering_complete = threading.Event()
 
+    def _get_pulse_env(self) -> dict:
+        """Get PulseAudio environment."""
+        env = os.environ.copy()
+        env["PULSE_SERVER"] = self.pulse_server
+        return env
+
+    def _ensure_pulseaudio_running(self):
+        """Start PulseAudio if not running."""
+        result = subprocess.run(["pulseaudio", "--check"], capture_output=True)
+        if result.returncode != 0:
+            logger.info("Starting PulseAudio daemon...")
+            subprocess.Popen(
+                ["pulseaudio", "--start", "--exit-idle-time=-1"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            import time
+            time.sleep(1)
+
+    def _create_null_sink(self) -> Optional[int]:
+        """Create null-sink for audio capture."""
+        cmd = [
+            "pactl", "load-module", "module-null-sink",
+            f"sink_name={self.sink_name}",
+            "rate=48000", "channels=2", "format=s16le",
+        ]
+        env = self._get_pulse_env()
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to create null-sink: {result.stderr}")
+        module_str = result.stdout.strip()
+        return int(module_str) if module_str.isdigit() else None
+
     def setup_pulseaudio(self):
         """Setup PulseAudio null-sink for audio capture."""
         try:
-            pulse_env = os.environ.copy()
-            pulse_env["PULSE_SERVER"] = self.pulse_server
-
-            # Check if PulseAudio is running
-            check_result = subprocess.run(
-                ["pulseaudio", "--check"],
-                capture_output=True,
-            )
-
-            if check_result.returncode != 0:
-                logger.info("Starting PulseAudio daemon...")
-                subprocess.Popen(
-                    ["pulseaudio", "--start", "--exit-idle-time=-1"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                import time
-                time.sleep(1)
-
-            # Create null-sink for this session
-            result = subprocess.run(
-                [
-                    "pactl", "load-module", "module-null-sink",
-                    f"sink_name={self.sink_name}",
-                    "rate=48000",
-                    "channels=2",
-                    "format=s16le",
-                ],
-                capture_output=True,
-                text=True,
-                env=pulse_env,
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to create null-sink: {result.stderr}")
-
-            module_str = result.stdout.strip()
-            self.sink_module_id = int(module_str) if module_str.isdigit() else None
-
+            self._ensure_pulseaudio_running()
+            self.sink_module_id = self._create_null_sink()
         except Exception as e:
             logger.error(f"Failed to setup PulseAudio: {e}")
             raise
@@ -313,7 +354,11 @@ class GStreamerWebRTC:
 
     def _build_pipeline(self) -> str:
         """Build low-latency GStreamer pipeline string."""
-        webrtcbin_props = f"webrtcbin name=webrtcbin bundle-policy=max-bundle stun-server={self.stun_server}"
+        stun = self.stun_server
+        webrtcbin_props = (
+            f"webrtcbin name=webrtcbin bundle-policy=max-bundle "
+            f"stun-server={stun}"
+        )
 
         if self.turn_server:
             webrtcbin_props += f" turn-server={self.turn_server}"
@@ -323,7 +368,8 @@ class GStreamerWebRTC:
             f"{webrtcbin_props} "
 
             # Video: 60fps, VP8 realtime, no buffering
-            f"ximagesrc display-name=:{self.display_num} use-damage=false show-pointer=false ! "
+            f"ximagesrc display-name=:{self.display_num} "
+            "use-damage=false show-pointer=false ! "
             f"video/x-raw,framerate={self.fps}/1 ! "
             "videoscale method=0 ! videoconvert ! "
             "video/x-raw,format=I420 ! "
@@ -333,7 +379,8 @@ class GStreamerWebRTC:
             "webrtcbin. "
 
             # Audio: balanced latency/stability
-            f"pulsesrc device={self.sink_name}.monitor server={self.pulse_server} "
+            f"pulsesrc device={self.sink_name}.monitor "
+            f"server={self.pulse_server} "
             "buffer-time=40000 latency-time=20000 ! "
             "audio/x-raw,rate=48000,channels=2,format=S16LE ! "
             "opusenc bitrate=128000 frame-size=20 ! "
@@ -345,7 +392,8 @@ class GStreamerWebRTC:
 
     def _on_negotiation_needed(self, webrtcbin):
         """Called when negotiation is needed - create offer."""
-        promise = Gst.Promise.new_with_change_func(self._on_offer_created, webrtcbin, None)
+        cb = self._on_offer_created
+        promise = Gst.Promise.new_with_change_func(cb, webrtcbin, None)
         webrtcbin.emit("create-offer", None, promise)
 
     def _on_offer_created(self, promise, webrtcbin, _):
@@ -363,7 +411,14 @@ class GStreamerWebRTC:
         promise.interrupt()
 
     def _on_ice_candidate(self, _webrtcbin, mline_index, candidate):
-        """Called when ICE candidate is generated."""
+        """Called when ICE candidate is generated.
+
+        Args:
+            _webrtcbin: The webrtcbin element (required by GStreamer signal,
+                not used as we access self.webrtcbin directly).
+            mline_index: The media line index for this candidate.
+            candidate: The ICE candidate string.
+        """
         if candidate:
             self._ice_candidates.append({
                 "sdpMLineIndex": mline_index,
@@ -372,53 +427,59 @@ class GStreamerWebRTC:
             logger.debug(f"ICE candidate gathered: {candidate[:50]}...")
 
     def _on_ice_gathering_state_changed(self, webrtcbin, _pspec):
-        """Called when ICE gathering state changes."""
+        """Called when ICE gathering state changes.
+
+        Args:
+            webrtcbin: The webrtcbin element to query the state from.
+            _pspec: GObject property spec (required by 'notify' signal, unused).
+        """
         state = webrtcbin.get_property("ice-gathering-state")
         if state == GstWebRTC.WebRTCICEGatheringState.COMPLETE:
             self._finalize_offer()
 
     def _on_bus_error(self, _bus, message):
-        """Handle GStreamer bus errors."""
+        """Handle GStreamer bus errors.
+
+        Args:
+            _bus: The GStreamer bus (required by bus signal, unused).
+            message: The GStreamer error message to parse.
+        """
         err, debug = message.parse_error()
         logger.error(f"GStreamer error: {err.message}")
         logger.debug(f"GStreamer debug: {debug}")
 
     def _on_bus_warning(self, _bus, message):
-        """Handle GStreamer bus warnings."""
+        """Handle GStreamer bus warnings.
+
+        Args:
+            _bus: The GStreamer bus (required by bus signal, unused).
+            message: The GStreamer warning message to parse.
+        """
         warn, debug = message.parse_warning()
         logger.warning(f"GStreamer warning: {warn.message}")
+        logger.debug(f"GStreamer warning debug: {debug}")
+
+    def _replace_ips_with_localhost(self, sdp_text: str) -> str:
+        """Replace all IPs with localhost for Docker port forwarding."""
+        import re
+        def replace_ip(match):
+            ip = match.group(1)
+            return ip if ip == '127.0.0.1' else '127.0.0.1'
+        return re.sub(r'(\d+\.\d+\.\d+\.\d+)', replace_ip, sdp_text)
 
     def _finalize_offer(self):
         """Get final SDP with all ICE candidates."""
         if not self.webrtcbin:
             return
 
-        # Get local description which now includes ICE candidates
         local_desc = self.webrtcbin.get_property("local-description")
-        if local_desc:
-            sdp_text = local_desc.sdp.as_text()
-
-            # Replace all IPs with localhost for Docker host access
-            # This includes:
-            # - 0.0.0.0 (from add-local-ip-address)
-            # - Docker internal IPs (172.x.x.x, 10.x.x.x, 192.168.x.x)
-            # - External STUN IPs (anything that's not 127.0.0.1)
-            import re
-
-            def replace_ip(match):
-                ip = match.group(1)
-                # Keep localhost as-is
-                if ip == '127.0.0.1':
-                    return ip
-                # Replace everything else with localhost for Docker port forwarding
-                return '127.0.0.1'
-
-            sdp_text = re.sub(r'(\d+\.\d+\.\d+\.\d+)', replace_ip, sdp_text)
-
-            self._offer_sdp = sdp_text
-            self._offer_ready.set()
-        else:
+        if not local_desc:
             logger.error("Failed to get local description")
+            return
+
+        sdp_text = local_desc.sdp.as_text()
+        self._offer_sdp = self._replace_ips_with_localhost(sdp_text)
+        self._offer_ready.set()
 
     def start(self):
         """Start the GStreamer pipeline in a separate thread."""
@@ -566,6 +627,18 @@ class RetroArchInstance:
         width: int = 1280,
         height: int = 720,
     ):
+        """Initialize a RetroArch instance.
+
+        Args:
+            session_id: Unique session identifier.
+            rom_path: Absolute path to the ROM file to run.
+            core: Name of the libretro core to use (without _libretro.so suffix).
+            save_path: Optional path to save file for the ROM.
+            state_path: Optional path to save state to load on startup.
+            display_num: X11 display number for Xvfb.
+            width: Display width in pixels.
+            height: Display height in pixels.
+        """
         self.session_id = session_id
         self.rom_path = rom_path
         self.core = core
@@ -708,120 +781,115 @@ class RetroArchInstance:
             logger.error(f"Failed to send RetroArch command '{command}': {e}")
             return None
 
+    def _find_core_options_file(self) -> Optional[Path]:
+        """Find the core options config file."""
+        paths = [
+            Path("/tmp/retroarch_config/retroarch-core-options.cfg"),
+            Path.home() / ".config" / "retroarch" / "retroarch-core-options.cfg",
+        ]
+        for path in paths:
+            if path.exists():
+                return path
+        return None
+
+    def _parse_core_option_line(self, line: str, core_name: str) -> Optional[tuple]:
+        """Parse a single core option line. Returns (key, value) or None."""
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            return None
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"')
+        if core_name and key.lower().startswith(core_name + '_'):
+            return (key, value)
+        return None
+
     async def get_core_options(self) -> dict:
         """Retrieve core options from config file."""
         try:
-            possible_paths = [
-                Path("/tmp/retroarch_config/retroarch-core-options.cfg"),
-                Path.home() / ".config" / "retroarch" / "retroarch-core-options.cfg",
-            ]
-
-            config_path = None
-            for path in possible_paths:
-                if path.exists():
-                    config_path = path
-                    break
-
+            config_path = self._find_core_options_file()
             if not config_path:
                 return {}
 
-            core_options = {}
             core_name = self.core.lower().replace('ra-', '') if self.core else ""
+            core_options = {}
 
             with open(config_path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"')
-                        if core_name and key.lower().startswith(core_name + '_'):
-                            core_options[key] = value
+                    parsed = self._parse_core_option_line(line, core_name)
+                    if parsed:
+                        core_options[parsed[0]] = parsed[1]
 
             return core_options
-
         except Exception as e:
             logger.error(f"Failed to get core options: {e}")
             return {}
+
+    def _get_xdotool_env(self) -> dict:
+        """Get environment for xdotool commands."""
+        env = os.environ.copy()
+        env["DISPLAY"] = f":{self.display_num}"
+        return env
+
+    async def _xdotool(self, *args):
+        """Run xdotool command."""
+        env = self._get_xdotool_env()
+        proc = await asyncio.create_subprocess_exec(
+            "xdotool", *args, env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+
+    def _xdotool_fire_and_forget(self, *args):
+        """Run xdotool without waiting (for mousemove)."""
+        env = self._get_xdotool_env()
+        asyncio.create_task(asyncio.create_subprocess_exec(
+            "xdotool", *args, env=env,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        ))
+
+    def _calculate_mouse_position(self, x: float, y: float) -> tuple[int, int]:
+        """Calculate xvfb mouse position from normalized coordinates."""
+        if self.touchscreen_region:
+            x_off, y_off, w_ratio, h_ratio = self.touchscreen_region[:4]
+            xvfb_x = int((x_off + x * w_ratio) * self.width)
+            xvfb_y = int((y_off + y * h_ratio) * self.height)
+        else:
+            xvfb_x = int(x * self.width)
+            xvfb_y = int(y * self.height)
+        xvfb_x = max(0, min(self.width - 1, xvfb_x))
+        xvfb_y = max(0, min(self.height - 1, xvfb_y))
+        return xvfb_x, xvfb_y
 
     async def send_input(self, event_data: dict):
         """Send input to RetroArch via xdotool."""
         try:
             event_type = event_data.get("type", "")
-            env = os.environ.copy()
-            env["DISPLAY"] = f":{self.display_num}"
 
             if event_type == "keydown":
-                key = event_data.get("key", "")
-                x11_key = self._map_key_to_x11(key)
+                x11_key = self._map_key_to_x11(event_data.get("key", ""))
                 if x11_key:
-                    proc = await asyncio.create_subprocess_exec(
-                        "xdotool", "keydown", x11_key,
-                        env=env,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
+                    await self._xdotool("keydown", x11_key)
 
             elif event_type == "keyup":
-                key = event_data.get("key", "")
-                x11_key = self._map_key_to_x11(key)
+                x11_key = self._map_key_to_x11(event_data.get("key", ""))
                 if x11_key:
-                    proc = await asyncio.create_subprocess_exec(
-                        "xdotool", "keyup", x11_key,
-                        env=env,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
+                    await self._xdotool("keyup", x11_key)
 
             elif event_type == "mousemove":
-                x = event_data.get("x", 0)
-                y = event_data.get("y", 0)
-
-                if self.touchscreen_region:
-                    x_offset, y_offset, width_ratio, height_ratio = self.touchscreen_region[:4]
-                    xvfb_x = int((x_offset + x * width_ratio) * self.width)
-                    xvfb_y = int((y_offset + y * height_ratio) * self.height)
-                else:
-                    xvfb_x = int(x * self.width)
-                    xvfb_y = int(y * self.height)
-
-                xvfb_x = max(0, min(self.width - 1, xvfb_x))
-                xvfb_y = max(0, min(self.height - 1, xvfb_y))
-
-                asyncio.create_task(
-                    asyncio.create_subprocess_exec(
-                        "xdotool", "mousemove", str(xvfb_x), str(xvfb_y),
-                        env=env,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                )
+                x, y = event_data.get("x", 0), event_data.get("y", 0)
+                xvfb_x, xvfb_y = self._calculate_mouse_position(x, y)
+                self._xdotool_fire_and_forget("mousemove", str(xvfb_x), str(xvfb_y))
 
             elif event_type == "mousedown":
-                button = event_data.get("button", 0)
-                xdotool_button = button + 1
-                proc = await asyncio.create_subprocess_exec(
-                    "xdotool", "mousedown", str(xdotool_button),
-                    env=env,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
+                button = str(event_data.get("button", 0) + 1)
+                await self._xdotool("mousedown", button)
 
             elif event_type == "mouseup":
-                button = event_data.get("button", 0)
-                xdotool_button = button + 1
-                proc = await asyncio.create_subprocess_exec(
-                    "xdotool", "mouseup", str(xdotool_button),
-                    env=env,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.wait()
+                button = str(event_data.get("button", 0) + 1)
+                await self._xdotool("mouseup", button)
 
             self.last_activity = datetime.now()
 
@@ -859,26 +927,30 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to execute command {command}: {e}")
 
+    def _update_config_line(self, line: str, option_name: str, option_value: str):
+        """Update a config line if it matches option_name, else return unchanged."""
+        if '=' not in line:
+            return line, False
+        key = line.split('=', 1)[0].strip()
+        if key == option_name:
+            return f'{option_name} = "{option_value}"\n', True
+        return line, False
+
     async def set_core_option(self, option_name: str, option_value: str):
         """Set a core option value."""
+        config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
+        if not config_file.exists():
+            return
+
         try:
-            config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
-
-            if not config_file.exists():
-                return
-
             lines = []
             option_found = False
 
             with open(config_file, 'r', encoding='utf-8') as f:
                 for line in f:
-                    if '=' in line:
-                        key = line.split('=', 1)[0].strip()
-                        if key == option_name:
-                            lines.append(f'{option_name} = "{option_value}"\n')
-                            option_found = True
-                            continue
-                    lines.append(line)
+                    new_line, found = self._update_config_line(line, option_name, option_value)
+                    lines.append(new_line)
+                    option_found = option_found or found
 
             if not option_found:
                 lines.append(f'{option_name} = "{option_value}"\n')
@@ -887,7 +959,6 @@ class RetroArchInstance:
                 f.writelines(lines)
 
             await self._send_retroarch_command("CORE_OPTION_RELOAD")
-
             self.last_activity = datetime.now()
 
         except Exception as e:
@@ -969,7 +1040,7 @@ class RetroArchInstance:
         try:
             if os.path.exists(config_path):
                 os.remove(config_path)
-        except:
+        except OSError:
             pass
 
 
@@ -977,6 +1048,11 @@ class RetroArchDaemon:
     """Main daemon managing all RetroArch streaming sessions"""
 
     def __init__(self):
+        """Initialize the RetroArch streaming daemon.
+
+        Sets up the Xvfb manager and prepares instance tracking
+        for managing concurrent streaming sessions.
+        """
         self.config = config_manager.get_config()
         self.xvfb_manager = XvfbManager()
         self.instances: dict[str, RetroArchInstance] = {}
@@ -1033,127 +1109,142 @@ class RetroArchDaemon:
                 logger.error(f"Error handling session events: {e}")
                 await asyncio.sleep(5)
 
+    async def _check_webrtc_answer(self, session_id: str, instance: RetroArchInstance):
+        """Check and apply WebRTC answer for a session."""
+        key = f"retroarch:webrtc_answer:{session_id}"
+        answer_sdp = await async_cache.get(key)
+        if not answer_sdp:
+            return
+        instance.set_answer_sdp(answer_sdp)
+        await async_cache.delete(key)
+
+    async def _check_stop_signal(self, session_id: str):
+        """Check for stop signal for a session."""
+        key = f"retroarch:stop:{session_id}"
+        if await async_cache.get(key):
+            await self._stop_session(session_id)
+            await async_cache.delete(key)
+
+    async def _check_core_options_request(self, session_id: str, instance: RetroArchInstance):
+        """Check for core options request for a session."""
+        key = f"retroarch:get_core_options:{session_id}"
+        if not await async_cache.get(key):
+            return
+        core_options = await instance.get_core_options()
+        response_key = f"retroarch:core_options:{session_id}"
+        await async_cache.set(response_key, json.dumps(core_options), ex=10)
+        await async_cache.delete(key)
+
     async def _handle_pubsub_events(self):
-        """Handle Redis pubsub events"""
+        """Handle Redis pubsub events."""
         while self.running:
             try:
                 for session_id, instance in list(self.instances.items()):
-                    # Check for WebRTC answer
-                    answer_key = f"retroarch:webrtc_answer:{session_id}"
-                    answer_sdp = await async_cache.get(answer_key)
-                    if answer_sdp:
-                        instance.set_answer_sdp(answer_sdp)
-                        await async_cache.delete(answer_key)
-
-                    # Check for stop signal
-                    stop_key = f"retroarch:stop:{session_id}"
-                    stop_signal = await async_cache.get(stop_key)
-                    if stop_signal:
-                        await self._stop_session(session_id)
-                        await async_cache.delete(stop_key)
-
-                    # Check for core options request
-                    request_key = f"retroarch:get_core_options:{session_id}"
-                    request = await async_cache.get(request_key)
-                    if request:
-                        core_options = await instance.get_core_options()
-                        response_key = f"retroarch:core_options:{session_id}"
-                        await async_cache.set(response_key, json.dumps(core_options), ex=10)
-                        await async_cache.delete(request_key)
-
+                    await self._check_webrtc_answer(session_id, instance)
+                    await self._check_stop_signal(session_id)
+                    await self._check_core_options_request(session_id, instance)
                 await asyncio.sleep(0.5)
-
             except Exception as e:
                 logger.error(f"Error handling pubsub events: {e}")
                 await asyncio.sleep(1)
 
+    async def _process_input_message(self, message: dict, instance: RetroArchInstance):
+        """Process a single input message."""
+        if message["type"] != "message":
+            return
+        try:
+            event = json.loads(message["data"])
+            await instance.send_input(event)
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid input event: {e}")
+
     async def _listen_for_inputs(self, session_id: str, instance: RetroArchInstance):
-        """Real-time pubsub listener for input events"""
+        """Real-time pubsub listener for input events."""
         pubsub = async_cache.pubsub()
         channel = f"retroarch:input:{session_id}"
 
         try:
             await pubsub.subscribe(channel)
-
             async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        event = json.loads(message["data"])
-                        await instance.send_input(event)
-                    except (json.JSONDecodeError, KeyError) as e:
-                        logger.error(f"Invalid input event: {e}")
-
+                await self._process_input_message(message, instance)
                 if session_id not in self.instances:
                     break
-
         except Exception as e:
             logger.error(f"Error in input listener for {session_id}: {e}")
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.close()
 
-    async def _listen_for_commands(self, session_id: str, instance: RetroArchInstance):
-        """Real-time pubsub listener for commands"""
-        pubsub = async_cache.pubsub()
-        command_channel = f"retroarch:command:{session_id}"
-        option_channel = f"retroarch:set_option:{session_id}"
+    async def _process_command_message(
+        self, message: dict, instance: RetroArchInstance,
+        command_channel: str, option_channel: str,
+    ):
+        """Process a single command/option message."""
+        if message["type"] != "message":
+            return
 
         try:
-            await pubsub.subscribe(command_channel, option_channel)
+            channel = message["channel"]
+            data = json.loads(message["data"])
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid command event: {e}")
+            return
 
+        if channel == command_channel:
+            command = data.get("command")
+            if command:
+                await instance.execute_command(command)
+        elif channel == option_channel:
+            option_name = data.get("option_name")
+            option_value = data.get("option_value")
+            if option_name and option_value is not None:
+                await instance.set_core_option(option_name, option_value)
+
+    async def _listen_for_commands(self, session_id: str, instance: RetroArchInstance):
+        """Real-time pubsub listener for commands."""
+        pubsub = async_cache.pubsub()
+        cmd_channel = f"retroarch:command:{session_id}"
+        opt_channel = f"retroarch:set_option:{session_id}"
+
+        try:
+            await pubsub.subscribe(cmd_channel, opt_channel)
             async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        channel = message["channel"]
-                        data = json.loads(message["data"])
-
-                        if channel == command_channel:
-                            command = data.get("command")
-                            if command:
-                                await instance.execute_command(command)
-                        elif channel == option_channel:
-                            option_name = data.get("option_name")
-                            option_value = data.get("option_value")
-                            if option_name and option_value is not None:
-                                await instance.set_core_option(option_name, option_value)
-
-                    except (json.JSONDecodeError, KeyError) as e:
-                        logger.error(f"Invalid command event: {e}")
-
+                await self._process_command_message(message, instance, cmd_channel, opt_channel)
                 if session_id not in self.instances:
                     break
-
         except Exception as e:
             logger.error(f"Error in command listener for {session_id}: {e}")
         finally:
-            await pubsub.unsubscribe(command_channel, option_channel)
+            await pubsub.unsubscribe(cmd_channel, opt_channel)
             await pubsub.close()
 
+    def _process_ice_message(self, message: dict, instance: RetroArchInstance):
+        """Process a single ICE candidate message."""
+        if message["type"] != "message":
+            return
+        try:
+            data = json.loads(message["data"])
+            candidate = data.get("candidate")
+            if candidate and instance.gstreamer:
+                instance.gstreamer.add_ice_candidate(candidate)
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Invalid ICE candidate event: {e}")
+
     async def _listen_for_ice_candidates(self, session_id: str, instance: RetroArchInstance):
-        """Real-time pubsub listener for ICE candidates from browser"""
+        """Real-time pubsub listener for ICE candidates from browser."""
         pubsub = async_cache.pubsub()
-        ice_channel = f"retroarch:ice:{session_id}"
+        channel = f"retroarch:ice:{session_id}"
 
         try:
-            await pubsub.subscribe(ice_channel)
-
+            await pubsub.subscribe(channel)
             async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        data = json.loads(message["data"])
-                        candidate = data.get("candidate")
-                        if candidate and instance.gstreamer:
-                            instance.gstreamer.add_ice_candidate(candidate)
-                    except (json.JSONDecodeError, KeyError) as e:
-                        logger.error(f"Invalid ICE candidate event: {e}")
-
+                self._process_ice_message(message, instance)
                 if session_id not in self.instances:
                     break
-
         except Exception as e:
             logger.error(f"Error in ICE listener for {session_id}: {e}")
         finally:
-            await pubsub.unsubscribe(ice_channel)
+            await pubsub.unsubscribe(channel)
             await pubsub.close()
 
     async def _start_session(self, session: RetroArchSession):
@@ -1180,7 +1271,7 @@ class RetroArchDaemon:
                     dims = json.loads(dims_data)
                     screen_width = dims.get("width", 1920)
                     screen_height = dims.get("height", 1080)
-                except:
+                except (json.JSONDecodeError, TypeError):
                     pass
 
             max_resolution = os.getenv("RETROARCH_MAX_RESOLUTION")

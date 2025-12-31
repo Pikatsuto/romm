@@ -1,3 +1,10 @@
+"""Configuration management API endpoints.
+
+This module provides REST API endpoints for reading and modifying
+RomM configuration settings, including platform bindings, version
+mappings, and exclusion rules.
+"""
+
 from fastapi import HTTPException, Request, status
 
 from config.config_manager import config_manager as cm
