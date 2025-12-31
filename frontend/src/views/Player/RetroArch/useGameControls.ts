@@ -24,31 +24,6 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   // Fullscreen state
   const isFullscreen = ref(false);
 
-  // Gamepad button mapping (RetroArch standard)
-  const GAMEPAD_MAPPING = {
-    // Face buttons
-    B: 0,      // A/Cross
-    A: 1,      // B/Circle
-    Y: 2,      // X/Square
-    X: 3,      // Y/Triangle
-    // Shoulder buttons
-    L1: 4,
-    R1: 5,
-    L2: 6,
-    R2: 7,
-    // System buttons
-    SELECT: 8,
-    START: 9,
-    // Analog stick buttons
-    L3: 10,
-    R3: 11,
-    // D-pad
-    UP: 12,
-    DOWN: 13,
-    LEFT: 14,
-    RIGHT: 15,
-  };
-
   /**
    * Poll gamepad state and send changes via socket
    */
@@ -121,8 +96,6 @@ export function useGameControls(options: () => GameControlsOptions | null) {
    */
   function startGamepadPolling() {
     if (gamepadLoopId !== null) return; // Already polling
-
-    console.log("[GameControls] Starting gamepad polling");
     gamepadLoopId = requestAnimationFrame(pollGamepads);
   }
 
@@ -133,15 +106,13 @@ export function useGameControls(options: () => GameControlsOptions | null) {
     if (gamepadLoopId !== null) {
       cancelAnimationFrame(gamepadLoopId);
       gamepadLoopId = null;
-      console.log("[GameControls] Stopped gamepad polling");
     }
   }
 
   /**
    * Handle gamepad connected event
    */
-  function handleGamepadConnected(event: GamepadEvent) {
-    console.log("[GameControls] Gamepad connected:", event.gamepad.id);
+  function handleGamepadConnected(_event: GamepadEvent) {
     gamepadConnected.value = true;
     startGamepadPolling();
   }
@@ -150,7 +121,6 @@ export function useGameControls(options: () => GameControlsOptions | null) {
    * Handle gamepad disconnected event
    */
   function handleGamepadDisconnected(event: GamepadEvent) {
-    console.log("[GameControls] Gamepad disconnected:", event.gamepad.id);
     gamepadButtonStates.delete(event.gamepad.index);
 
     // Stop polling if no gamepads left

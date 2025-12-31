@@ -198,7 +198,6 @@ class XvfbManager:
         async with self.lock:
             if display_num in self.displays:
                 self.displays[display_num].in_use = False
-                logger.info(f"Released Xvfb display :{display_num}")
 
     async def cleanup_all(self):
         """Terminate all Xvfb processes"""
@@ -300,7 +299,6 @@ class GStreamerWebRTC:
 
             module_str = result.stdout.strip()
             self.sink_module_id = int(module_str) if module_str.isdigit() else None
-            logger.info(f"Created PulseAudio null-sink: {self.sink_name}")
 
         except Exception as e:
             logger.error(f"Failed to setup PulseAudio: {e}")
@@ -319,7 +317,6 @@ class GStreamerWebRTC:
 
         if self.turn_server:
             webrtcbin_props += f" turn-server={self.turn_server}"
-            logger.info(f"Using TURN server: {self.turn_server.split('@')[-1] if '@' in self.turn_server else self.turn_server}")
 
         # Ultra low-latency pipeline
         pipeline = (
@@ -348,7 +345,6 @@ class GStreamerWebRTC:
 
     def _on_negotiation_needed(self, webrtcbin):
         """Called when negotiation is needed - create offer."""
-        logger.info("Negotiation needed, creating offer...")
         promise = Gst.Promise.new_with_change_func(self._on_offer_created, webrtcbin, None)
         webrtcbin.emit("create-offer", None, promise)
 
@@ -366,8 +362,6 @@ class GStreamerWebRTC:
         webrtcbin.emit("set-local-description", offer, promise)
         promise.interrupt()
 
-        logger.info("Offer set as local description, waiting for ICE gathering...")
-
     def _on_ice_candidate(self, _webrtcbin, mline_index, candidate):
         """Called when ICE candidate is generated."""
         if candidate:
@@ -380,21 +374,8 @@ class GStreamerWebRTC:
     def _on_ice_gathering_state_changed(self, webrtcbin, _pspec):
         """Called when ICE gathering state changes."""
         state = webrtcbin.get_property("ice-gathering-state")
-        logger.info(f"ICE gathering state: {state}")
-        # GstWebRTCICEGatheringState: 0=new, 1=gathering, 2=complete
         if state == GstWebRTC.WebRTCICEGatheringState.COMPLETE:
-            logger.info(f"ICE gathering complete, {len(self._ice_candidates)} candidates")
             self._finalize_offer()
-
-    def _on_ice_connection_state_changed(self, webrtcbin, _pspec):
-        """Called when ICE connection state changes."""
-        state = webrtcbin.get_property("ice-connection-state")
-        logger.info(f"ICE connection state: {state}")
-
-    def _on_connection_state_changed(self, webrtcbin, _pspec):
-        """Called when overall connection state changes."""
-        state = webrtcbin.get_property("connection-state")
-        logger.info(f"WebRTC connection state: {state}")
 
     def _on_bus_error(self, _bus, message):
         """Handle GStreamer bus errors."""
@@ -435,7 +416,6 @@ class GStreamerWebRTC:
             sdp_text = re.sub(r'(\d+\.\d+\.\d+\.\d+)', replace_ip, sdp_text)
 
             self._offer_sdp = sdp_text
-            logger.info(f"Final offer SDP length: {len(self._offer_sdp)}")
             self._offer_ready.set()
         else:
             logger.error("Failed to get local description")
@@ -445,7 +425,6 @@ class GStreamerWebRTC:
         def run_pipeline():
             try:
                 pipeline_str = self._build_pipeline()
-                logger.info(f"Creating GStreamer pipeline for session {self.session_id}")
 
                 self.pipeline = Gst.parse_launch(pipeline_str)
                 self.webrtcbin = self.pipeline.get_by_name("webrtcbin")
@@ -457,25 +436,17 @@ class GStreamerWebRTC:
                 # Configure ICE agent for Docker networking
                 ice_agent = self.webrtcbin.get_property("ice-agent")
                 if ice_agent:
-                    # Set fixed port range for Docker port mapping
                     ice_agent.set_property("min-rtp-port", self.MIN_RTP_PORT)
                     ice_agent.set_property("max-rtp-port", self.MAX_RTP_PORT)
-                    logger.info(f"ICE agent port range: {self.MIN_RTP_PORT}-{self.MAX_RTP_PORT}")
-
-                    # Force binding to 0.0.0.0 for all interfaces
-                    # This stops automatic interface discovery and uses only specified IPs
                     try:
-                        ret = ice_agent.emit("add-local-ip-address", "0.0.0.0")
-                        logger.info(f"Added local IP 0.0.0.0 to ICE agent: {ret}")
-                    except Exception as e:
-                        logger.warning(f"Failed to add local IP to ICE agent: {e}")
+                        ice_agent.emit("add-local-ip-address", "0.0.0.0")
+                    except Exception:
+                        pass
 
                 # Connect signals
                 self.webrtcbin.connect("on-negotiation-needed", self._on_negotiation_needed)
                 self.webrtcbin.connect("on-ice-candidate", self._on_ice_candidate)
                 self.webrtcbin.connect("notify::ice-gathering-state", self._on_ice_gathering_state_changed)
-                self.webrtcbin.connect("notify::ice-connection-state", self._on_ice_connection_state_changed)
-                self.webrtcbin.connect("notify::connection-state", self._on_connection_state_changed)
 
                 # Bus message handler for errors
                 bus = self.pipeline.get_bus()
@@ -488,8 +459,6 @@ class GStreamerWebRTC:
                 if ret == Gst.StateChangeReturn.FAILURE:
                     logger.error("Failed to start pipeline")
                     return
-
-                logger.info(f"GStreamer pipeline started for session {self.session_id}")
 
                 # Run GLib main loop
                 self.loop = GLib.MainLoop()
@@ -528,23 +497,18 @@ class GStreamerWebRTC:
 
                 def on_answer_set(promise):
                     state = promise.wait()
-                    if state == Gst.PromiseResult.REPLIED:
-                        logger.info(f"Answer SDP successfully set for session {self.session_id}")
-                    else:
+                    if state != Gst.PromiseResult.REPLIED:
                         logger.error(f"Failed to set answer SDP, state: {state}")
 
                 promise = Gst.Promise.new_with_change_func(on_answer_set)
                 self.webrtcbin.emit("set-remote-description", answer, promise)
-                logger.info(f"Set remote answer in GLib thread for session {self.session_id}")
 
             except Exception as e:
                 logger.error(f"Failed to set answer SDP in GLib: {e}")
 
             return False  # Don't repeat
 
-        # Schedule on GLib mainloop thread
         GLib.idle_add(set_remote_description_in_glib)
-        logger.info(f"Scheduled set_answer for session {self.session_id}")
         return True
 
     def add_ice_candidate(self, candidate: dict):
@@ -560,7 +524,6 @@ class GStreamerWebRTC:
 
                 if candidate_str:
                     self.webrtcbin.emit("add-ice-candidate", sdp_mline_index, candidate_str)
-                    logger.info(f"Added remote ICE candidate: {candidate_str[:50]}...")
             except Exception as e:
                 logger.error(f"Failed to add ICE candidate: {e}")
             return False
@@ -585,11 +548,8 @@ class GStreamerWebRTC:
                     capture_output=True,
                     env=pulse_env,
                 )
-                logger.info(f"Cleaned up PulseAudio sink: {self.sink_name}")
-            except Exception as e:
-                logger.warning(f"Failed to cleanup PulseAudio sink: {e}")
-
-        logger.info(f"Stopped GStreamer pipeline for session {self.session_id}")
+            except Exception:
+                pass
 
 
 class RetroArchInstance:
@@ -664,7 +624,6 @@ class RetroArchInstance:
                 f.write("video_driver = \"gl\"\n")
                 f.write("video_threaded = \"true\"\n")
                 f.write("video_vsync = \"false\"\n")
-                #f.write("video_frame_delay = \"16\"\n")
                 f.write("video_black_frame_insertion = \"0\"\n")
                 f.write("video_shader_enable = \"false\"\n")
                 f.write("video_smooth = \"false\"\n")
@@ -1085,7 +1044,6 @@ class RetroArchDaemon:
                     if answer_sdp:
                         instance.set_answer_sdp(answer_sdp)
                         await async_cache.delete(answer_key)
-                        logger.info(f"Processed WebRTC answer for {session_id}")
 
                     # Check for stop signal
                     stop_key = f"retroarch:stop:{session_id}"
@@ -1116,7 +1074,6 @@ class RetroArchDaemon:
 
         try:
             await pubsub.subscribe(channel)
-            logger.info(f"Listening for inputs on {channel}")
 
             async for message in pubsub.listen():
                 if message["type"] == "message":
@@ -1179,7 +1136,6 @@ class RetroArchDaemon:
 
         try:
             await pubsub.subscribe(ice_channel)
-            logger.info(f"Listening for ICE candidates on {ice_channel}")
 
             async for message in pubsub.listen():
                 if message["type"] == "message":

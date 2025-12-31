@@ -1,7 +1,5 @@
 import api from "@/services/api";
 
-export const retroarchApi = api;
-
 interface StartSessionRequest {
   rom_id: number;
   core: string;

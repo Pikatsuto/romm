@@ -5,7 +5,6 @@ Each session represents an active RetroArch instance with WebRTC streaming.
 """
 
 import json
-import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum

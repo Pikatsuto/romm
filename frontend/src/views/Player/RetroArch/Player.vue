@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import type { SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
@@ -89,12 +89,11 @@ async function startSession() {
   try {
     statusMessage.value = "Starting RetroArch session...";
 
-    // Detect screen dimensions and orientation
+    // Detect screen dimensions
     const screenWidth = window.screen.width;
     const screenHeight = window.screen.height;
-    const isPortrait = screenHeight > screenWidth;
 
-    // 1. Start session with screen dimensions
+    // Start session with screen dimensions
     const { data } = await retroarchApi.startSession({
       romId: props.rom.id,
       core: props.core,
@@ -115,15 +114,6 @@ async function startSession() {
         username: server.username || undefined,
         credential: server.credential || undefined,
       }));
-      console.log("[RetroArch] ICE servers from backend:", iceServersFromBackend.value.length);
-    }
-
-    console.log("[RetroArch] Session created:", sessionId.value);
-    if (touchscreenRegion.value) {
-      console.log("[RetroArch] Touchscreen region:", touchscreenRegion.value);
-    }
-    if (Object.keys(coreOptions.value).length > 0) {
-      console.log(`[RetroArch] Core options loaded: ${Object.keys(coreOptions.value).length} options`);
     }
 
     statusMessage.value = "Connecting to signaling server...";
@@ -167,22 +157,14 @@ async function setupWebRTC(offerSdp: string) {
     ? iceServersFromBackend.value
     : config.value.EJS_NETPLAY_ICE_SERVERS || [{ urls: "stun:stun.l.google.com:19302" }];
 
-  console.log("[RetroArch] Using ICE servers:", JSON.stringify(iceServers, null, 2));
-
-  // Test TURN connectivity before starting WebRTC
-  if (iceServers.some(s => s.urls && s.urls.toString().includes("turn:"))) {
-    console.log("[RetroArch] TURN servers configured, checking connectivity...");
-  }
-
   const pc = new RTCPeerConnection({
     iceServers,
-    iceCandidatePoolSize: 10,  // Pre-allocate candidates for faster gathering
+    iceCandidatePoolSize: 10,
   });
   peerConnection.value = pc;
 
   // Receive video/audio stream
   pc.ontrack = (event) => {
-    console.log("[RetroArch] Received media track:", event.track.kind);
     if (videoRef.value && event.streams[0]) {
       videoRef.value.srcObject = event.streams[0];
       videoRef.value.play().catch((err: Error) => {
@@ -194,36 +176,19 @@ async function setupWebRTC(offerSdp: string) {
   // Handle ICE candidates
   pc.onicecandidate = (event) => {
     if (event.candidate && socket.value && sessionId.value) {
-      const candidateStr = event.candidate.candidate;
-      const candidateType = candidateStr.includes("typ relay") ? "relay" :
-                            candidateStr.includes("typ srflx") ? "srflx" :
-                            candidateStr.includes("typ host") ? "host" : "unknown";
-      console.log(`[RetroArch] ICE candidate (${candidateType}):`, candidateStr.substring(0, 80));
       socket.value.emit("retroarch-ice-candidate", {
         session_id: sessionId.value,
         candidate: event.candidate.toJSON(),
       });
-    } else if (event.candidate === null) {
-      console.log("[RetroArch] ICE gathering complete");
     }
-  };
-
-  // ICE gathering state changes
-  pc.onicegatheringstatechange = () => {
-    console.log("[RetroArch] ICE gathering state:", pc.iceGatheringState);
-  };
-
-  // ICE connection state changes
-  pc.oniceconnectionstatechange = () => {
-    console.log("[RetroArch] ICE connection state:", pc.iceConnectionState);
   };
 
   // Connection state changes
   pc.onconnectionstatechange = () => {
-    console.log("[RetroArch] Connection state:", pc.connectionState);
     if (pc.connectionState === "connected") {
       statusMessage.value = "Playing...";
     } else if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+      console.error("[RetroArch] WebRTC connection failed:", pc.connectionState);
       error.value = "WebRTC connection failed";
       statusMessage.value = error.value;
     }
@@ -258,19 +223,10 @@ function connectSocket(): Promise<void> {
 
     socket.value.on("connect", () => {
       clearTimeout(timeout);
-      console.log("[RetroArch] SocketIO connected");
-
-      // Join the session room to receive targeted events
       if (sessionId.value) {
         socket.value?.emit("join", sessionId.value);
-        console.log(`[RetroArch] Joined room: ${sessionId.value}`);
       }
-
       resolve();
-    });
-
-    socket.value.on("disconnect", () => {
-      console.log("[RetroArch] SocketIO disconnected");
     });
 
     socket.value.on("connect_error", (err: Error) => {
@@ -281,20 +237,14 @@ function connectSocket(): Promise<void> {
 
     // Listen for core options updates from backend
     socket.value.on("retroarch-core-options-ready", (data: { session_id: string; core_options: Record<string, string> }) => {
-      console.log(`[RetroArch] Core options ready:`, data.core_options);
-
       if (data.session_id === sessionId.value) {
-        // Update the core options ref
         coreOptions.value = data.core_options;
-        console.log(`[RetroArch] Updated ${Object.keys(data.core_options).length} core options dynamically`);
       }
     });
   });
 }
 
 async function stopSession() {
-  console.log("[RetroArch] Stopping session");
-
   if (sessionId.value) {
     try {
       await retroarchApi.stopSession({ sessionId: sessionId.value });
@@ -443,12 +393,8 @@ function handleMouseDown(event: MouseEvent) {
   // If not locked yet, request pointer lock (hide cursor)
   if (!isPointerLocked.value) {
     // Initialize virtual position to current mouse position within touchscreen zone
-    const touchscreenWidthPx = rect.width * width;
-    const touchscreenHeightPx = rect.height * height;
-    virtualMouseX.value = (relX - x_offset) * rect.width;
-    virtualMouseY.value = (relY - y_offset) * rect.height;
-    virtualMouseX.value = curve(virtualMouseX.value);
-    virtualMouseY.value = curve(virtualMouseY.value);
+    virtualMouseX.value = curve((relX - x_offset) * rect.width);
+    virtualMouseY.value = curve((relY - y_offset) * rect.height);
 
     videoRef.value.requestPointerLock();
     return; // Don't send click when requesting lock
@@ -505,8 +451,6 @@ function sendCommand(command: string) {
     session_id: sessionId.value,
     command: command,
   });
-
-  console.log(`[RetroArch] Sent command: ${command}`);
 }
 
 function handleQuickSave() {
@@ -551,8 +495,6 @@ function handleSettingsChanged(newSettings: any) {
       option_value: optionValue,
     });
   }
-
-  console.log("[RetroArch] Settings changed:", newSettings);
 }
 </script>
 
@@ -680,23 +622,5 @@ function handleSettingsChanged(newSettings: any) {
   left: 1rem;
   z-index: 90;
   opacity: 0.9;
-}
-
-.mouse-hint {
-  position: absolute;
-  bottom: 2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 15;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
 }
 </style>
