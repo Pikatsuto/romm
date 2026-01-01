@@ -24,6 +24,8 @@ interface StartSessionRequest {
   screen_width?: number;
   /** Client screen height for optimal resolution selection */
   screen_height?: number;
+  /** Optional firmware/BIOS file ID to use */
+  firmware_id?: number;
 }
 
 /**
@@ -101,6 +103,7 @@ async function startSession({
   stateId,
   screenWidth,
   screenHeight,
+  firmwareId,
 }: {
   romId: number;
   core: string;
@@ -108,6 +111,7 @@ async function startSession({
   stateId?: number;
   screenWidth?: number;
   screenHeight?: number;
+  firmwareId?: number;
 }): Promise<{ data: StartSessionResponse }> {
   const requestData: StartSessionRequest = {
     rom_id: romId,
@@ -118,6 +122,7 @@ async function startSession({
   if (stateId) requestData.state_id = stateId;
   if (screenWidth) requestData.screen_width = screenWidth;
   if (screenHeight) requestData.screen_height = screenHeight;
+  if (firmwareId) requestData.firmware_id = firmwareId;
 
   return api.post("/retroarch/stream/start", requestData);
 }

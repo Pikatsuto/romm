@@ -46,6 +46,7 @@ class RetroArchSession:
     webrtc_answer: Optional[str] = None
     save_id: Optional[int] = None
     state_id: Optional[int] = None
+    firmware_id: Optional[int] = None
 
     def __post_init__(self):
         """Initialize timestamps if not provided."""

@@ -29,6 +29,7 @@ from services.retroarch_instance import RetroArchInstance
 from services.retroarch_sync import (
     restore_save_to_session,
     restore_state_to_session,
+    restore_firmware_to_session,
     sync_session_to_romm,
 )
 
@@ -67,7 +68,8 @@ class RetroArchDaemon:
         self.running = False
         self.cleanup_task: Optional[asyncio.Task] = None
         self.sync_task: Optional[asyncio.Task] = None
-        # Store session metadata for sync (user_id, rom_id, platform_slug, core)
+        # Store session metadata for sync
+        # (user_id, rom_id, platform_slug, core)
         self.session_metadata: dict[str, dict] = {}
 
     async def start(
@@ -198,9 +200,10 @@ class RetroArchDaemon:
         while self.running:
             try:
                 for session_id, instance in list(self.instances.items()):
-                    await self._check_webrtc_answer(session_id, instance)
+                    options = (session_id, instance)
+                    await self._check_webrtc_answer(*options)
                     await self._check_stop_signal(session_id)
-                    await self._check_core_options_request(session_id, instance)
+                    await self._check_core_options_request(*options)
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error handling pubsub events: {e}")
@@ -280,7 +283,10 @@ class RetroArchDaemon:
             command = data.get("command")
             state_id = data.get("state_id")  # Optional: specific state to load
             if command:
-                result = await instance.execute_command(command, state_id=state_id)
+                result = await instance.execute_command(
+                    command,
+                    state_id=state_id
+                )
                 # For SCREENSHOT command, publish the screenshot data
                 if command == "SCREENSHOT" and result:
                     import base64
@@ -462,6 +468,13 @@ class RetroArchDaemon:
                 if state_path:
                     instance.state_path = state_path
 
+            # Restore firmware to session's system directory
+            if session.firmware_id:
+                restore_firmware_to_session(
+                    firmware_id=session.firmware_id,
+                    session_system_dir=instance.system_dir,
+                )
+
             # Store session metadata for periodic sync
             self.session_metadata[session.session_id] = {
                 "user_id": session.user_id,
@@ -582,7 +595,10 @@ class RetroArchDaemon:
             display_num = instance.display_num
 
             # Capture screenshot for auto-save before syncing
-            if instance.retroarch_process and instance.retroarch_process.poll() is None:
+            if (
+                instance.retroarch_process and
+                instance.retroarch_process.poll() is None
+            ):
                 await instance._capture_state_screenshot()
 
             # Sync saves/states to RomM before stopping

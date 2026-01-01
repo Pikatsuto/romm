@@ -15,7 +15,7 @@ from typing import Optional
 
 from config import ASSETS_BASE_PATH
 from handler.database import db_save_handler, db_state_handler, db_user_handler
-from handler.database import db_screenshot_handler
+from handler.database import db_screenshot_handler, db_firmware_handler
 from handler.filesystem.assets_handler import FSAssetsHandler
 from models.assets import Save, State, Screenshot
 
@@ -124,6 +124,45 @@ def restore_state_to_session(
     except Exception as e:
         logger.error(f"Failed to restore state {state_id}: {e}")
         return None
+
+
+def restore_firmware_to_session(
+    firmware_id: int,
+    session_system_dir: Path,
+) -> bool:
+    """Restore a firmware/BIOS file from RomM to the session's system directory.
+
+    Args:
+        firmware_id: ID of the firmware to restore.
+        session_system_dir: Session's system directory for RetroArch.
+
+    Returns:
+        True if firmware was restored successfully, False otherwise.
+    """
+    try:
+        firmware = db_firmware_handler.get_firmware(firmware_id)
+        if not firmware:
+            logger.warning(f"Firmware {firmware_id} not found")
+            return False
+
+        source_path = Path(ASSETS_BASE_PATH) / firmware.full_path
+        if not source_path.exists():
+            logger.warning(f"Firmware file not found: {source_path}")
+            return False
+
+        # Create the system directory if it doesn't exist
+        session_system_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy firmware to session's system directory with original filename
+        dest_path = session_system_dir / firmware.file_name
+        shutil.copy2(source_path, dest_path)
+
+        logger.info(f"Restored firmware {firmware.file_name} to {dest_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to restore firmware {firmware_id}: {e}")
+        return False
 
 
 def sync_saves_to_romm(

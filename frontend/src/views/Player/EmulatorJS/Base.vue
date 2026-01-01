@@ -599,6 +599,7 @@ function openCacheDialog() {
           :state="selectedState"
           :save="selectedSave"
           :core="getRetroArchCoreName(selectedCore || '')"
+          :firmware="selectedFirmware"
         />
       </v-col>
     </template>

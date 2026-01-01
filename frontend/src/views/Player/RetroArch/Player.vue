@@ -16,7 +16,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import type { SaveSchema, StateSchema } from "@/__generated__";
+import type { FirmwareSchema, SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
 import retroarchApi from "@/services/api/retroarch";
 import screenshotApi from "@/services/api/screenshot";
@@ -37,6 +37,8 @@ const props = defineProps<{
   state: StateSchema | null;
   /** Libretro core name to use for emulation */
   core: string;
+  /** Optional firmware/BIOS file to use */
+  firmware: FirmwareSchema | null;
 }>();
 
 // Vue Router and store references
@@ -143,6 +145,7 @@ async function startSession() {
       stateId: props.state?.id,
       screenWidth,
       screenHeight,
+      firmwareId: props.firmware?.id,
     });
 
     sessionId.value = data.session_id;

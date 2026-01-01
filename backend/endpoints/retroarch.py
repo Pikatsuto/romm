@@ -40,6 +40,7 @@ class StartSessionRequest(BaseModel):
     state_id: int | None = None
     screen_width: int | None = None
     screen_height: int | None = None
+    firmware_id: int | None = None
 
 
 class TouchscreenRegion(BaseModel):
@@ -166,6 +167,7 @@ async def start_stream(
         core=data.core,
         save_id=data.save_id,
         state_id=data.state_id,
+        firmware_id=data.firmware_id,
         state=SessionState.STARTING,
     )
 

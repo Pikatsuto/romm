@@ -124,6 +124,7 @@ class RetroArchInstance:
         self.states_dir = self.session_dir / "states"
         self.screenshots_dir = self.session_dir / "screenshots"
         self.config_dir = self.session_dir / "config"
+        self.system_dir = self.session_dir / "system"
 
     def _setup_session_directories(self):
         """Create per-session users directories."""
@@ -132,6 +133,7 @@ class RetroArchInstance:
         self.states_dir.mkdir(parents=True, exist_ok=True)
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.system_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created session directories at {self.session_dir}")
 
     def cleanup_session_dir(self):
@@ -193,10 +195,11 @@ class RetroArchInstance:
                 f.write('network_cmd_port = "55355"\n')
                 f.write('stdin_cmd_enable = "true"\n')
 
-                # Per-session directories for saves, states, screenshots
+                # Per-session directories
                 f.write(f'savefile_directory = "{self.saves_dir}"\n')
                 f.write(f'savestate_directory = "{self.states_dir}"\n')
                 f.write(f'screenshot_directory = "{self.screenshots_dir}"\n')
+                f.write(f'system_directory = "{self.system_dir}"\n')
                 f.write('notification_show_screenshot = "true"\n')
                 f.write('input_screenshot = "f8"\n')
 
@@ -588,7 +591,7 @@ class RetroArchInstance:
                 self.last_activity = datetime.now()
                 return screenshot_data
 
-            # For LOADSTATE with state_id, fetch state from RomM and copy to .state
+            # For LOADSTATE with state_id, fetch RomM state and copy
             if command == "LOADSTATE" and state_id is not None:
                 await self._load_state_from_romm(state_id)
                 # File is fully synced to disk (fsync), no sleep needed
@@ -686,11 +689,11 @@ class RetroArchInstance:
                 logger.warning(f"State file not found: {source_path}")
                 return False
 
-            # Copy to .state for RetroArch to load (LOAD_STATE uses current slot)
+            # Copy to .state for RetroArch to load
             rom_name = Path(self.rom_path).stem
             dest_path = self.states_dir / f"{rom_name}.state"
 
-            # Use blocking copy with explicit file sync to ensure data is on disk
+            # Use blocking copy to ensure data is on disk
             with open(source_path, "rb") as src:
                 data = src.read()
             with open(dest_path, "wb") as dst:
@@ -698,7 +701,8 @@ class RetroArchInstance:
                 dst.flush()
                 os.fsync(dst.fileno())
 
-            logger.info(f"Loaded state {state_id} to {dest_path} ({len(data)} bytes)")
+            msg = f"Loaded state {state_id} to {dest_path} ({len(data)} bytes)"
+            logger.info(msg)
             return True
 
         except Exception as e:
@@ -769,8 +773,8 @@ class RetroArchInstance:
     async def _capture_manual_save_screenshot(self):
         """Capture screenshot and copy state file with matching timestamp.
 
-        Finds the most recently modified state file and copies it with timestamp.
-        Both screenshot and state copy get the same timestamp so they match in RomM.
+        Finds the most recently modified state file and copies it.
+        Both screenshot and state copy are timestamped so they match in RomM.
         """
         try:
             rom_name = Path(self.rom_path).stem
@@ -787,9 +791,9 @@ class RetroArchInstance:
                 else:
                     ext = state_file.suffix  # .state0, .state1, etc.
 
-                timestamped_state = self.states_dir / f"{rom_name}_{timestamp}{ext}"
-                shutil.copy2(state_file, timestamped_state)
-                logger.info(f"Copied state: {timestamped_state.name}")
+                timestamped = self.states_dir / f"{rom_name}_{timestamp}{ext}"
+                shutil.copy2(state_file, timestamped)
+                logger.info(f"Copied state: {timestamped.name}")
             else:
                 logger.warning("No state file found in states directory")
 
@@ -814,7 +818,8 @@ class RetroArchInstance:
             _, stderr = await proc.communicate()
 
             if proc.returncode != 0:
-                logger.error(f"Manual save screenshot failed: {stderr.decode()}")
+                msg = f"Manual save screenshot failed: {stderr.decode()}"
+                logger.error(msg)
                 return
 
             logger.info(f"Manual save screenshot: {screenshot_name}")
