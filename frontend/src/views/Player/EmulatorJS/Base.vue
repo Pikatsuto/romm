@@ -58,6 +58,14 @@ const isRetroArchSelected = computed(() =>
   selectedCore.value ? isRetroArchCore(selectedCore.value) : false
 );
 
+function formatCoreDisplayName(core: string): string {
+  if (isRetroArchCore(core)) {
+    const coreName = getRetroArchCoreName(core);
+    return `${coreName} (RetroArch)`;
+  }
+  return core;
+}
+
 async function onPlay() {
   if (rom.value && auth.scopes.includes("roms.user.write")) {
     romApi.updateUserRomProps({
@@ -458,7 +466,7 @@ function openCacheDialog() {
                 :label="t('common.core')"
                 :items="
                   supportedCores.map((c) => ({
-                    title: c,
+                    title: formatCoreDisplayName(c),
                     value: c,
                   }))
                 "
