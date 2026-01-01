@@ -158,6 +158,15 @@ function unselectState() {
 }
 
 watch(selectedCore, (newSelectedCore) => {
+  // Persist core selection to localStorage
+  if (rom.value && newSelectedCore) {
+    localStorage.setItem(
+      `player:${rom.value.platform_slug}:core`,
+      newSelectedCore,
+    );
+  }
+
+  // Clear incompatible state selection
   if (
     selectedState.value &&
     selectedState.value.emulator &&
@@ -226,7 +235,8 @@ onMounted(async () => {
   const storedCore = localStorage.getItem(
     `player:${rom.value.platform_slug}:core`,
   );
-  if (storedCore) {
+  // Only use stored core if it's still in the supported cores list
+  if (storedCore && supportedCores.value.includes(storedCore)) {
     selectedCore.value = storedCore;
   } else {
     // Otherwise auto select first supported core
