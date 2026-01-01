@@ -6,8 +6,10 @@ input forwarding, save states, and core option configuration.
 """
 
 import asyncio
+import fcntl
 import logging
 import os
+import select
 import shutil
 import subprocess
 from datetime import datetime
@@ -48,11 +50,11 @@ CORE_ASPECT_RATIOS = {
     "desmume": (256, 384),  # DS: two 256x192 screens stacked
     "melonds": (256, 384),
     "mgba": (240, 160),     # GBA
-    "gambatte": (160, 144), # GB/GBC
+    "gambatte": (160, 144),  # GB/GBC
     "snes9x": (256, 224),   # SNES
     "fceumm": (256, 240),   # NES
     "genesis_plus_gx": (320, 224),  # Genesis/Mega Drive
-    "nestopia": (256, 240), # NES
+    "nestopia": (256, 240),  # NES
     "mesen": (256, 240),    # NES
 }
 
@@ -77,6 +79,7 @@ class RetroArchInstance:
         gstreamer: GStreamer WebRTC streaming instance.
         last_activity: Timestamp of last user activity for timeout detection.
         touchscreen_region: Calculated touchscreen region for DS/3DS cores.
+        session_dir: Per-session temporary directory for saves/states.
     """
 
     def __init__(
@@ -117,6 +120,32 @@ class RetroArchInstance:
 
         self.touchscreen_region = self._calculate_touchscreen_region()
 
+        # Per-session directories
+        self.session_dir = Path(f"/tmp/retroarch/{session_id}")
+        self.saves_dir = self.session_dir / "saves"
+        self.states_dir = self.session_dir / "states"
+        self.screenshots_dir = self.session_dir / "screenshots"
+        self.config_dir = self.session_dir / "config"
+
+    def _setup_session_directories(self):
+        """Create per-session users directories."""
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.saves_dir.mkdir(parents=True, exist_ok=True)
+        self.states_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Created session directories at {self.session_dir}")
+
+    def cleanup_session_dir(self):
+        """Remove the per-session tempor ary directory and all its contents."""
+        try:
+            if self.session_dir.exists():
+                shutil.rmtree(self.session_dir)
+                msg = f"Cleaned up session directory: {self.session_dir}"
+                logger.info(msg)
+        except Exception as e:
+            logger.error(f"Failed to cleanup session directory: {e}")
+
     async def start(
         self
     ):
@@ -129,6 +158,9 @@ class RetroArchInstance:
             bool: True if RetroArch started successfully, False otherwise.
         """
         try:
+            # Note: session directories are created by the daemon before start()
+            # to allow restoring saves/states before RetroArch starts
+
             # Create GStreamer source and setup PulseAudio
             self.gstreamer = GStreamerWebRTC(
                 session_id=self.session_id,
@@ -143,22 +175,17 @@ class RetroArchInstance:
             env["DISPLAY"] = f":{self.display_num}"
             env.update(self.gstreamer.get_pulseaudio_env())
 
-            # Create RetroArch config
-            config_dir = Path("/tmp/retroarch_config")
-            config_dir.mkdir(exist_ok=True)
-            core_options_path = config_dir / "retroarch-core-options.cfg"
+            # Create core options in session config directory
+            core_options_path = self.config_dir / "retroarch-core-options.cfg"
 
             # Copy pre-generated core options if available
             core_cfg = f"{self.core.lower()}-core-options.cfg"
             pre_generated = Path("/app/romm/config/retroarch") / core_cfg
-            if pre_generated.exists() and not core_options_path.exists():
+            if pre_generated.exists():
                 shutil.copy2(pre_generated, core_options_path)
 
-            # Create screenshot directory
-            screenshot_dir = Path("/tmp/retroarch/screenshots")
-            screenshot_dir.mkdir(parents=True, exist_ok=True)
-
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
+            logger.info(f"Creating RetroArch config with states_dir={self.states_dir}")
             with open(config_path, "w") as f:
                 f.write('#include "/etc/retroarch.cfg"\n')
                 f.write('input_auto_mouse_grab = "false"\n')
@@ -169,10 +196,16 @@ class RetroArchInstance:
                 f.write('network_cmd_port = "55355"\n')
                 f.write('stdin_cmd_enable = "true"\n')
 
-                # Screenshot settings
-                f.write(f'screenshot_directory = "{screenshot_dir}"\n')
+                # Per-session directories for saves, states, screenshots
+                f.write(f'savefile_directory = "{self.saves_dir}"\n')
+                f.write(f'savestate_directory = "{self.states_dir}"\n')
+                f.write(f'screenshot_directory = "{self.screenshots_dir}"\n')
                 f.write('notification_show_screenshot = "true"\n')
                 f.write('input_screenshot = "f8"\n')
+
+                # State slot setting (auto-load disabled, we use LOAD_STATE command instead)
+                f.write('state_slot = "0"\n')
+                f.write('savestate_auto_load = "false"\n')
 
                 # Video settings
                 f.write('video_driver = "gl"\n')
@@ -210,9 +243,6 @@ class RetroArchInstance:
                 self.rom_path,
             ]
 
-            if self.state_path:
-                cmd.extend(["-e", "1", "-s", self.state_path])
-
             self.retroarch_process = subprocess.Popen(
                 cmd,
                 env=env,
@@ -229,6 +259,36 @@ class RetroArchInstance:
 
             pid = self.retroarch_process.pid
             logger.info(f"Started RetroArch (PID: {pid})")
+
+            # Load initial state if one was restored
+            if self.state_path:
+                # Wait for RetroArch and the game to fully initialize
+                await asyncio.sleep(3.0)
+                # Debug: list contents of states directory
+                state_files = list(self.states_dir.glob("*"))
+                logger.info(f"States dir contents before LOAD_STATE: {[f.name for f in state_files]}")
+                for sf in state_files:
+                    logger.info(f"  - {sf.name}: {sf.stat().st_size} bytes")
+                # Also log the ROM name for comparison
+                rom_name = Path(self.rom_path).stem
+                logger.info(f"ROM stem (expected state prefix): '{rom_name}'")
+                await self._send_retroarch_command("LOAD_STATE")
+                logger.info(f"Sent LOAD_STATE command for restored state")
+
+                # Wait and capture RetroArch logs to see what happened
+                await asyncio.sleep(0.5)
+                if self.retroarch_process and self.retroarch_process.poll() is None:
+                    if self.retroarch_process.stderr:
+                        # Non-blocking read of stderr
+                        fd = self.retroarch_process.stderr.fileno()
+                        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                        try:
+                            stderr_data = self.retroarch_process.stderr.read(4096)
+                            if stderr_data:
+                                logger.info(f"RetroArch stderr: {stderr_data.decode(errors='replace')}")
+                        except Exception:
+                            pass
 
             # Start GStreamer streaming
             self.gstreamer.start()
@@ -304,6 +364,11 @@ class RetroArchInstance:
         Returns:
             Path to the core options file if found, None otherwise.
         """
+        # First check session-specific config
+        session_cfg = self.config_dir / "retroarch-core-options.cfg"
+        if session_cfg.exists():
+            return session_cfg
+
         home_cfg = Path.home() / ".config/retroarch/retroarch-core-options.cfg"
         paths = [
             Path("/tmp/retroarch_config/retroarch-core-options.cfg"),
@@ -549,8 +614,14 @@ class RetroArchInstance:
 
             await self._send_retroarch_command(retroarch_cmd)
 
+            # For SAVESTATE or SAVE_AND_QUIT,
+            # capture a screenshot with matching filename
+            if command in ("SAVESTATE", "SAVE_AND_QUIT"):
+                await asyncio.sleep(0.3)  # Wait for state file to be written
+                await self._capture_state_screenshot()
+
             if command == "SAVE_AND_QUIT":
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.2)
                 await self._send_retroarch_command("QUIT")
 
             self.last_activity = datetime.now()
@@ -588,6 +659,71 @@ class RetroArchInstance:
         y_offset = (self.height - game_height) // 2
 
         return game_width, game_height, x_offset, y_offset
+
+    def _get_latest_state_file(self) -> Optional[Path]:
+        """Find the recently modified state in the session states directory.
+
+        Returns:
+            Path to the latest state file, or None if no states exist.
+        """
+        try:
+            state_files = list(self.states_dir.glob("*.state*"))
+            if not state_files:
+                return None
+            # Sort by modification time, newest first
+            state_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+            return state_files[0]
+        except Exception as e:
+            logger.error(f"Failed to find latest state file: {e}")
+            return None
+
+    async def _capture_state_screenshot(self):
+        """Capture a screenshot and save it with association.
+
+        Associates screenshot with savestates via matching file_name_no_ext.
+        Screenshot is named after the ROM (e.g., GameName.png) to match states
+        (e.g., GameName.state0 has file_name_no_ext = GameName).
+        """
+        try:
+            # Find the latest state file to verify a state was created
+            state_file = self._get_latest_state_file()
+            if not state_file:
+                msg = "No state file found to associate screenshot with"
+                logger.warning(msg)
+                return
+
+            # Generate screenshot filename: ROM name + .png
+            # State "GameName.state0" has file_name_no_ext="GameName"
+            # match "GameName.png" has file_name_no_ext="GameName"
+            rom_name = Path(self.rom_path).stem
+            screenshot_name = f"{rom_name}.png"
+            screenshot_path = self.screenshots_dir / screenshot_name
+
+            # Take screenshot
+            env = self._get_xdotool_env()
+            game_w, game_h, x_off, y_off = self._calculate_game_crop()
+            crop_geometry = f"{game_w}x{game_h}+{x_off}+{y_off}"
+
+            proc = await asyncio.create_subprocess_exec(
+                "import",
+                "-window", "root",
+                "-crop", crop_geometry,
+                "+repage",
+                str(screenshot_path),
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"State screenshot failed: {stderr.decode()}")
+                return
+
+            logger.info(f"State screenshot saved: {screenshot_path.name}")
+
+        except Exception as e:
+            logger.error(f"Failed to capture state screenshot: {e}")
 
     async def _take_screenshot(self) -> Optional[bytes]:
         """Take a screenshot of the Xvfb display.
@@ -676,8 +812,8 @@ class RetroArchInstance:
             option_name: Full option name (e.g., "desmume_screens_layout").
             option_value: New value to set for the option.
         """
-        config_file = Path("/tmp/retroarch_config/retroarch-core-options.cfg")
-        if not config_file.exists():
+        config_file = self._find_core_options_file()
+        if not config_file:
             return
 
         try:
