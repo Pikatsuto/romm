@@ -1,33 +1,79 @@
 /**
- * Composable for game controls (gamepad, virtual gamepad, fullscreen)
- * Inspired by EmulatorJS controls
+ * Game Controls Composable
+ *
+ * Vue composable for managing game input controls including physical gamepads,
+ * virtual on-screen controls for mobile devices, and fullscreen state.
+ * Inspired by EmulatorJS control handling.
+ *
+ * @module views/Player/RetroArch/useGameControls
  */
 
 import { ref, onMounted, onUnmounted } from "vue";
 import type { Socket } from "socket.io-client";
 
+/**
+ * Options for initializing game controls.
+ */
 export interface GameControlsOptions {
+  /** Active session identifier for input routing */
   sessionId: string;
+  /** SocketIO connection for sending input events */
   socket: Socket;
+  /** Whether running on a mobile device (enables virtual gamepad) */
   isMobile?: boolean;
 }
 
+/**
+ * Composable for managing game controls.
+ *
+ * Handles physical gamepad input polling, virtual gamepad state,
+ * and fullscreen mode toggling. Gamepad inputs are sent via SocketIO
+ * for low-latency transmission to the server.
+ *
+ * @param options - Factory function returning control options or null if not ready
+ * @returns Reactive refs and methods for game control state
+ *
+ * @example
+ * ```ts
+ * const gameControls = useGameControls(() =>
+ *   sessionId.value && socket.value
+ *     ? { sessionId: sessionId.value, socket: socket.value }
+ *     : null
+ * );
+ *
+ * // Access state
+ * if (gameControls.gamepadConnected.value) {
+ *   console.log("Gamepad ready!");
+ * }
+ *
+ * // Toggle fullscreen
+ * gameControls.toggleFullscreen(containerElement);
+ * ```
+ */
 export function useGameControls(options: () => GameControlsOptions | null) {
-  // Gamepad state
+  /** Request animation frame ID for gamepad polling loop */
   let gamepadLoopId: number | null = null;
+
+  /** Map of gamepad index to button pressed states for change detection */
   const gamepadButtonStates = new Map<number, boolean[]>();
+
+  /** Whether any physical gamepad is currently connected */
   const gamepadConnected = ref(false);
 
-  // Virtual gamepad for mobile
+  /** Whether the virtual on-screen gamepad is visible (mobile) */
   const showVirtualGamepad = ref(false);
 
-  // Fullscreen state
+  /** Whether the player is currently in fullscreen mode */
   const isFullscreen = ref(false);
 
   /**
-   * Poll gamepad state and send changes via socket
+   * Poll all connected gamepads and send state changes via socket.
+   *
+   * Uses requestAnimationFrame for smooth 60fps polling. Only sends
+   * events when button states change to minimize network traffic.
+   * Analog sticks use a dead zone to filter noise.
    */
-  function pollGamepads() {
+  function pollGamepads(): void {
     const ctrl = options();
     if (!ctrl) return;
 
@@ -44,17 +90,15 @@ export function useGameControls(options: () => GameControlsOptions | null) {
 
       const previousStates = gamepadButtonStates.get(i)!;
 
-      // Check each button
+      // Check each button for state changes
       for (let btnIndex = 0; btnIndex < gamepad.buttons.length; btnIndex++) {
         const button = gamepad.buttons[btnIndex];
         const pressed = button.pressed;
         const wasPressed = previousStates[btnIndex];
 
-        // Button state changed
         if (pressed !== wasPressed) {
           previousStates[btnIndex] = pressed;
 
-          // Send button event
           ctrl.socket.emit("retroarch-input", {
             session_id: ctrl.sessionId,
             event: {
@@ -67,11 +111,11 @@ export function useGameControls(options: () => GameControlsOptions | null) {
         }
       }
 
-      // Check axes (analog sticks) - send if value changed significantly
+      // Check analog axes (apply dead zone filtering)
       for (let axisIndex = 0; axisIndex < gamepad.axes.length; axisIndex++) {
         const value = gamepad.axes[axisIndex];
 
-        // Only send if axis value is significant (dead zone)
+        // Dead zone: only send if value is significant
         if (Math.abs(value) > 0.15) {
           ctrl.socket.emit("retroarch-input", {
             session_id: ctrl.sessionId,
@@ -92,17 +136,23 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   }
 
   /**
-   * Start gamepad polling
+   * Start the gamepad polling loop.
+   *
+   * Called automatically when a gamepad is connected.
+   * Safe to call multiple times (will not start duplicate loops).
    */
-  function startGamepadPolling() {
-    if (gamepadLoopId !== null) return; // Already polling
+  function startGamepadPolling(): void {
+    if (gamepadLoopId !== null) return;
     gamepadLoopId = requestAnimationFrame(pollGamepads);
   }
 
   /**
-   * Stop gamepad polling
+   * Stop the gamepad polling loop.
+   *
+   * Called automatically when all gamepads are disconnected
+   * or when the component is unmounted.
    */
-  function stopGamepadPolling() {
+  function stopGamepadPolling(): void {
     if (gamepadLoopId !== null) {
       cancelAnimationFrame(gamepadLoopId);
       gamepadLoopId = null;
@@ -110,17 +160,24 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   }
 
   /**
-   * Handle gamepad connected event
+   * Handle gamepad connected browser event.
+   *
+   * @param _event - Gamepad event (unused, but required by event listener)
    */
-  function handleGamepadConnected(_event: GamepadEvent) {
+  function handleGamepadConnected(_event: GamepadEvent): void {
     gamepadConnected.value = true;
     startGamepadPolling();
   }
 
   /**
-   * Handle gamepad disconnected event
+   * Handle gamepad disconnected browser event.
+   *
+   * Cleans up state for the disconnected gamepad and stops polling
+   * if no gamepads remain connected.
+   *
+   * @param event - Gamepad event containing the disconnected gamepad
    */
-  function handleGamepadDisconnected(event: GamepadEvent) {
+  function handleGamepadDisconnected(event: GamepadEvent): void {
     gamepadButtonStates.delete(event.gamepad.index);
 
     // Stop polling if no gamepads left
@@ -133,9 +190,14 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   }
 
   /**
-   * Toggle fullscreen mode
+   * Toggle fullscreen mode for the player container.
+   *
+   * Uses the Fullscreen API to enter or exit fullscreen mode.
+   * Updates the isFullscreen ref to reflect current state.
+   *
+   * @param container - HTML element to make fullscreen (usually the player container)
    */
-  async function toggleFullscreen(container: HTMLElement | null) {
+  async function toggleFullscreen(container: HTMLElement | null): Promise<void> {
     if (!container) return;
 
     try {
@@ -152,22 +214,27 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   }
 
   /**
-   * Handle fullscreen change event
+   * Handle fullscreen change browser event.
+   *
+   * Syncs the isFullscreen ref with the actual fullscreen state,
+   * which may change due to user pressing Escape or other browser actions.
    */
-  function handleFullscreenChange() {
+  function handleFullscreenChange(): void {
     isFullscreen.value = !!document.fullscreenElement;
   }
 
   /**
-   * Toggle virtual gamepad visibility
+   * Toggle virtual gamepad visibility.
+   *
+   * Used on mobile devices to show/hide on-screen touch controls.
    */
-  function toggleVirtualGamepad() {
+  function toggleVirtualGamepad(): void {
     showVirtualGamepad.value = !showVirtualGamepad.value;
   }
 
-  // Lifecycle hooks
+  // Lifecycle: setup event listeners on mount
   onMounted(() => {
-    // Check for existing gamepads
+    // Check for existing gamepads (may already be connected)
     const gamepads = navigator.getGamepads();
     const hasGamepads = Array.from(gamepads).some(gp => gp !== null);
     if (hasGamepads) {
@@ -175,14 +242,15 @@ export function useGameControls(options: () => GameControlsOptions | null) {
       startGamepadPolling();
     }
 
-    // Listen for gamepad events
+    // Listen for gamepad connect/disconnect events
     window.addEventListener("gamepadconnected", handleGamepadConnected);
     window.addEventListener("gamepaddisconnected", handleGamepadDisconnected);
 
-    // Listen for fullscreen changes
+    // Listen for fullscreen changes (user may press Escape)
     document.addEventListener("fullscreenchange", handleFullscreenChange);
   });
 
+  // Lifecycle: cleanup on unmount
   onUnmounted(() => {
     stopGamepadPolling();
     gamepadButtonStates.clear();
@@ -193,16 +261,16 @@ export function useGameControls(options: () => GameControlsOptions | null) {
   });
 
   return {
-    // Gamepad
+    // Gamepad state
     gamepadConnected,
     startGamepadPolling,
     stopGamepadPolling,
 
-    // Virtual gamepad
+    // Virtual gamepad state
     showVirtualGamepad,
     toggleVirtualGamepad,
 
-    // Fullscreen
+    // Fullscreen state
     isFullscreen,
     toggleFullscreen,
   };

@@ -1,59 +1,111 @@
+/**
+ * RetroArch Player Menu Component
+ *
+ * EmulatorJS-style overlay menu for RetroArch streaming player.
+ * Provides quick access to save states, settings, and core options.
+ *
+ * Features:
+ * - Auto-hiding menu bar with mouse activity detection
+ * - Quick save/load, screenshot, pause, restart controls
+ * - Video, audio, input, and performance settings
+ * - Dynamic core-specific options from backend
+ * - Settings persistence in localStorage per core
+ *
+ * @component
+ */
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import type { DetailedRom } from "@/stores/roms";
 
+/** Component props */
 const props = defineProps<{
+  /** ROM data for display in menu bar */
   rom: DetailedRom;
+  /** Current libretro core name */
   core: string;
+  /** Whether player is in fullscreen mode */
   isFullscreen: boolean;
-  coreOptionsFromBackend: Record<string, string>; // Core options loaded from backend
+  /** Core-specific options loaded from backend */
+  coreOptionsFromBackend: Record<string, string>;
 }>();
 
+/** Component events */
 const emit = defineEmits<{
+  /** Toggle fullscreen mode */
   fullscreen: [];
+  /** Create a quick save state */
   quickSave: [];
+  /** Load the last quick save state */
   quickLoad: [];
+  /** Save state and exit to game details */
   saveAndQuit: [];
+  /** Restart the emulated game */
   restart: [];
+  /** Take a screenshot */
   screenshot: [];
+  /** Toggle pause state */
   togglePause: [];
+  /** Settings were changed (triggers sync to backend) */
   settingsChanged: [settings: typeof settings.value];
+  /** Exit player without saving */
   exit: [];
 }>();
 
+// Menu visibility state
+/** Whether the main menu modal is open */
 const showMenu = ref(false);
+/** Whether the settings dialog is open */
 const showSettings = ref(false);
+/** Current settings tab (video, audio, input, performance, core) */
 const settingsTab = ref("video");
+/** Whether the top menu bar is visible */
 const menuBarVisible = ref(true);
+/** Whether the game is currently paused */
 const isPaused = ref(false);
+/** Timeout ID for auto-hiding the menu bar */
 let hideMenuTimeout: number | null = null;
 
-// RetroArch settings (persisted in localStorage per core)
+/**
+ * RetroArch settings persisted in localStorage per core.
+ * These control video, audio, input, and performance options.
+ */
 const settings = ref({
-  // Video
-  aspectRatio: "auto", // auto, 4:3, 16:9, 1:1, core-provided
+  // Video settings
+  /** Aspect ratio mode: auto, 4:3, 16:9, 1:1, core */
+  aspectRatio: "auto",
+  /** Scale by integer multiples only */
   integerScale: false,
+  /** Enable bilinear filtering for smooth scaling */
   bilinearFilter: true,
-  rotation: 0, // 0, 90, 180, 270
+  /** Screen rotation in degrees: 0, 90, 180, 270 */
+  rotation: 0,
 
-  // Audio
+  // Audio settings
+  /** Volume level 0-100 */
   volume: 100,
+  /** Enable audio output */
   audioEnable: true,
 
-  // Performance
+  // Performance settings
+  /** Enable rewind feature (impacts performance) */
   rewindEnable: false,
-  frameskip: 0, // 0-10
-  fastForwardRatio: 2.0, // 1.5-10.0
+  /** Frame skip count 0-10 */
+  frameskip: 0,
+  /** Fast forward speed multiplier 1.5-10.0 */
+  fastForwardRatio: 2.0,
 
-  // Input
+  // Input settings
+  /** Analog stick dead zone 0-0.5 */
   analogDeadzone: 0.15,
+  /** Show on-screen touch controls */
   inputOverlay: false,
 });
 
-// Core-specific options from config (EJS_SETTINGS)
+/** Core-specific options (loaded from backend, persisted locally) */
 const coreOptions = ref<Record<string, string | boolean>>({});
 
-const MENU_HIDE_DELAY_MS = 3000; // Hide menu after 3 seconds of inactivity
+/** Delay in ms before auto-hiding the menu bar */
+const MENU_HIDE_DELAY_MS = 3000;
 
 // Settings persistence (localStorage per core)
 function getStorageKey() {

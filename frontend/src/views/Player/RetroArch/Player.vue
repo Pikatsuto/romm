@@ -1,3 +1,18 @@
+/**
+ * RetroArch WebRTC Player Component
+ *
+ * Main player component for RetroArch cloud gaming streaming.
+ * Handles WebRTC connection, input forwarding, and session lifecycle.
+ *
+ * Features:
+ * - WebRTC video/audio streaming from server-side RetroArch
+ * - Keyboard and mouse input forwarding via SocketIO
+ * - Gamepad support via useGameControls composable
+ * - Touchscreen support for DS/3DS games with pointer lock
+ * - EmulatorJS-style menu overlay for settings and commands
+ *
+ * @component
+ */
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -11,27 +26,49 @@ import { storeToRefs } from "pinia";
 import { useGameControls } from "./useGameControls";
 import PlayerMenu from "./PlayerMenu.vue";
 
+/** Component props */
 const props = defineProps<{
+  /** ROM data including id, name, and metadata */
   rom: DetailedRom;
+  /** Optional save file to load on startup */
   save: SaveSchema | null;
+  /** Optional save state to load on startup */
   state: StateSchema | null;
+  /** Libretro core name to use for emulation */
   core: string;
 }>();
 
+// Vue Router and store references
 const router = useRouter();
 const configStore = storeConfig();
 const { config } = storeToRefs(configStore);
+
+// DOM element refs
+/** Video element for WebRTC stream display */
 const videoRef = ref<HTMLVideoElement>();
+/** Container element for fullscreen and event handling */
 const containerRef = ref<HTMLDivElement>();
+/** Player menu component ref for programmatic control */
 const playerMenuRef = ref<InstanceType<typeof PlayerMenu>>();
+
+// Session state
+/** Current session ID from backend */
 const sessionId = ref<string | null>(null);
+/** WebRTC peer connection for video/audio streaming */
 const peerConnection = ref<RTCPeerConnection | null>(null);
+/** SocketIO connection for real-time input and commands */
 const socket = ref<Socket | null>(null);
+/** Status message displayed during loading/errors */
 const statusMessage = ref<string>("Initializing RetroArch...");
+/** Whether session is currently loading */
 const isLoading = ref(true);
+/** Error message if session failed to start */
 const error = ref<string | null>(null);
 
-// Touchscreen region configuration from backend (DS, 3DS, etc.)
+/**
+ * Touchscreen region for DS/3DS cores.
+ * Coordinates are normalized (0-1) relative to video element.
+ */
 const touchscreenRegion = ref<{
   x_offset: number;
   y_offset: number;
@@ -39,20 +76,22 @@ const touchscreenRegion = ref<{
   height: number;
 } | null>(null);
 
-// Core options loaded from backend
+/** Core-specific options loaded from backend config */
 const coreOptions = ref<Record<string, string>>({});
 
-// Pointer lock state for cursor capture
+/** Whether pointer is locked to video element (for touchscreen input) */
 const isPointerLocked = ref(false);
-// Virtual mouse position when pointer is locked (pixels within touchscreen zone)
+/** Virtual mouse X position in pixels when pointer locked */
 const virtualMouseX = ref(0);
+/** Virtual mouse Y position in pixels when pointer locked */
 const virtualMouseY = ref(0);
 
-// Throttle mousemove events to prevent flooding
+/** Timestamp of last mouse move event (for throttling) */
 let lastMouseMoveTime = 0;
-const MOUSE_MOVE_THROTTLE_MS = 8; // ~120 FPS for better responsiveness
+/** Minimum ms between mouse move events (~120 FPS) */
+const MOUSE_MOVE_THROTTLE_MS = 8;
 
-// Game controls (gamepad, virtual gamepad, fullscreen)
+/** Game controls composable (gamepad, fullscreen) */
 const gameControls = useGameControls(() =>
   sessionId.value && socket.value
     ? { sessionId: sessionId.value, socket: socket.value }
