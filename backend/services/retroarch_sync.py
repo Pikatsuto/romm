@@ -93,15 +93,10 @@ def restore_state_to_session(
             return None
 
         source_path = Path(ASSETS_BASE_PATH) / state.full_path
-        logger.debug(f"State restore: file_path={state.file_path}, file_name={state.file_name}")
-        logger.debug(f"State restore: full_path={state.full_path}, source={source_path}")
 
         if not source_path.exists():
             logger.warning(f"State file not found: {source_path}")
             return None
-
-        source_size = source_path.stat().st_size
-        logger.debug(f"State restore: source file size = {source_size} bytes")
 
         # Preserve the original extension from the saved state
         # RetroArch uses .state, .state0, .state1, etc. depending on slot
@@ -109,8 +104,6 @@ def restore_state_to_session(
         original_ext = state.file_extension  # e.g., ".state0", ".state", etc.
         dest_filename = f"{rom_name}{original_ext}"
         dest_path = session_states_dir / dest_filename
-
-        logger.debug(f"State restore: original_ext={original_ext}, dest_filename={dest_filename}")
 
         shutil.copy2(source_path, dest_path)
 

@@ -6,10 +6,8 @@ input forwarding, save states, and core option configuration.
 """
 
 import asyncio
-import fcntl
 import logging
 import os
-import select
 import shutil
 import subprocess
 from datetime import datetime
@@ -264,31 +262,7 @@ class RetroArchInstance:
             if self.state_path:
                 # Wait for RetroArch and the game to fully initialize
                 await asyncio.sleep(3.0)
-                # Debug: list contents of states directory
-                state_files = list(self.states_dir.glob("*"))
-                logger.info(f"States dir contents before LOAD_STATE: {[f.name for f in state_files]}")
-                for sf in state_files:
-                    logger.info(f"  - {sf.name}: {sf.stat().st_size} bytes")
-                # Also log the ROM name for comparison
-                rom_name = Path(self.rom_path).stem
-                logger.info(f"ROM stem (expected state prefix): '{rom_name}'")
                 await self._send_retroarch_command("LOAD_STATE")
-                logger.info(f"Sent LOAD_STATE command for restored state")
-
-                # Wait and capture RetroArch logs to see what happened
-                await asyncio.sleep(0.5)
-                if self.retroarch_process and self.retroarch_process.poll() is None:
-                    if self.retroarch_process.stderr:
-                        # Non-blocking read of stderr
-                        fd = self.retroarch_process.stderr.fileno()
-                        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-                        try:
-                            stderr_data = self.retroarch_process.stderr.read(4096)
-                            if stderr_data:
-                                logger.info(f"RetroArch stderr: {stderr_data.decode(errors='replace')}")
-                        except Exception:
-                            pass
 
             # Start GStreamer streaming
             self.gstreamer.start()
