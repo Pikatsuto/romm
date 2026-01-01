@@ -19,27 +19,518 @@ from services.gstreamer_webrtc import GStreamerWebRTC
 logger = logging.getLogger(__name__)
 
 
-# Touchscreen region configuration per core
-TOUCHSCREEN_REGIONS = {
+# Pointer/touchscreen zone configuration per core
+# For multi-screen consoles (DS, 3DS), defines where the touch area is located
+# For single-screen pointer devices (Wii, DOS, etc.), full screen is used
+# white_zone values are normalized (0.0-1.0) fractions of non-touch areas
+#
+# Categories:
+# - DUAL_SCREEN: DS, 3DS - touchscreen is on secondary display
+# - GAMEPAD_SCREEN: Wii U - GamePad has separate touchscreen
+# - FULL_SCREEN_POINTER: Wii, light guns, mouse-based systems
+# - HANDHELD_TOUCH: Vita, Switch - full screen touch
+CORE_POINTER_ZONES = {
+    # =========================================================================
+    # NINTENDO DS - Two 256x192 screens stacked vertically, bottom is touch
+    # =========================================================================
     "desmume": {
-        "vertical": (0.3125, 0.5, 0.375, 0.5, 256, 192, 192),
-        "horizontal": (0.5, 0.3125, 0.5, 0.375, 256, 192, 192),
-        "native_total_height": 384,
+        "native": (256, 384),
+        "touch_native": (256, 192),
+        "white_zone_top": 0.5,      # Top screen (non-touch)
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "dual_screen",
     },
     "melonds": {
-        "vertical": (0.3125, 0.5, 0.375, 0.5, 256, 192, 192),
-        "horizontal": (0.5, 0.3125, 0.5, 0.375, 256, 192, 192),
-        "native_total_height": 384,
+        "native": (256, 384),
+        "touch_native": (256, 192),
+        "white_zone_top": 0.5,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "dual_screen",
     },
+    # =========================================================================
+    # NINTENDO 3DS - Top 400x240 (wide), bottom 320x240 (touch, narrower)
+    # In vertical layout: bottom screen centered below top screen
+    # =========================================================================
     "citra": {
-        "vertical": (0.3125, 0.5, 0.375, 0.5, 320, 240, 240),
-        "horizontal": (0.5, 0.3125, 0.5, 0.375, 320, 240, 240),
-        "native_total_height": 480,
+        "native": (400, 480),
+        "touch_native": (320, 240),
+        "white_zone_top": 0.5,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.1,     # Bottom screen narrower, centered
+        "white_zone_right": 0.1,
+        "type": "dual_screen",
     },
+    # =========================================================================
+    # NINTENDO WII U - GamePad 854x480 touchscreen
+    # =========================================================================
     "cemu": {
-        "vertical": (0.0, 0.0, 1.0, 1.0, 854, 480, 0),
-        "horizontal": (0.0, 0.0, 1.0, 1.0, 854, 480, 0),
-        "native_total_height": 480,
+        "native": (854, 480),
+        "touch_native": (854, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "gamepad_screen",
+    },
+    # =========================================================================
+    # NINTENDO WII - Wiimote pointer, full screen
+    # =========================================================================
+    "dolphin": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # SONY PS VITA - 960x544 front touchscreen
+    # =========================================================================
+    "vita3k": {
+        "native": (960, 544),
+        "touch_native": (960, 544),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "handheld_touch",
+    },
+    # =========================================================================
+    # NINTENDO SWITCH - 1280x720 touchscreen (handheld mode)
+    # =========================================================================
+    "yuzu": {
+        "native": (1280, 720),
+        "touch_native": (1280, 720),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "handheld_touch",
+    },
+    "ryujinx": {
+        "native": (1280, 720),
+        "touch_native": (1280, 720),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "handheld_touch",
+    },
+    # =========================================================================
+    # DOS/PC - Mouse-based games, full screen pointer
+    # =========================================================================
+    "dosbox_pure": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    "dosbox_svn": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # AMIGA - Mouse-based computer, full screen pointer
+    # =========================================================================
+    "puae": {
+        "native": (720, 576),
+        "touch_native": (720, 576),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    "uae4arm": {
+        "native": (720, 576),
+        "touch_native": (720, 576),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # ATARI ST - Mouse-based computer
+    # =========================================================================
+    "hatari": {
+        "native": (640, 400),
+        "touch_native": (640, 400),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # SCUMMVM - Point and click adventure games
+    # =========================================================================
+    "scummvm": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # LIGHT GUN GAMES - NES Zapper, SNES Super Scope, etc.
+    # =========================================================================
+    "fceumm": {
+        "native": (256, 240),
+        "touch_native": (256, 240),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "nestopia": {
+        "native": (256, 240),
+        "touch_native": (256, 240),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "mesen": {
+        "native": (256, 240),
+        "touch_native": (256, 240),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "snes9x": {
+        "native": (256, 224),
+        "touch_native": (256, 224),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",  # Super Scope, mouse (Mario Paint)
+    },
+    "bsnes": {
+        "native": (256, 224),
+        "touch_native": (256, 224),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # SEGA - Light gun (Menacer, Justifier), mouse
+    # =========================================================================
+    "genesis_plus_gx": {
+        "native": (320, 224),
+        "touch_native": (320, 224),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "picodrive": {
+        "native": (320, 224),
+        "touch_native": (320, 224),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # SEGA SATURN - Light gun (Virtua Gun), mouse
+    # =========================================================================
+    "yabause": {
+        "native": (704, 480),
+        "touch_native": (704, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "kronos": {
+        "native": (704, 480),
+        "touch_native": (704, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "beetle_saturn": {
+        "native": (704, 480),
+        "touch_native": (704, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # PLAYSTATION - GunCon, Namco G-Con, mouse
+    # =========================================================================
+    "pcsx_rearmed": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "beetle_psx": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "beetle_psx_hw": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "duckstation": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "swanstation": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # PLAYSTATION 2 - GunCon 2
+    # =========================================================================
+    "pcsx2": {
+        "native": (640, 448),
+        "touch_native": (640, 448),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # 3DO - Light gun games
+    # =========================================================================
+    "opera": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "4do": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    # =========================================================================
+    # ARCADE - MAME/FBNeo with trackball, spinner, light gun, touchscreen
+    # =========================================================================
+    "mame": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "mame2003": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "mame2003_plus": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "mame2010": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "mame2016": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "fbneo": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    "fbalpha": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "arcade",
+    },
+    # =========================================================================
+    # PC ENGINE / TURBOGRAFX - Mouse games
+    # =========================================================================
+    "beetle_pce": {
+        "native": (512, 242),
+        "touch_native": (512, 242),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    "beetle_pce_fast": {
+        "native": (512, 242),
+        "touch_native": (512, 242),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # COMMODORE 64 - Mouse, light pen
+    # =========================================================================
+    "vice_x64": {
+        "native": (384, 272),
+        "touch_native": (384, 272),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # MSX - Mouse games
+    # =========================================================================
+    "bluemsx": {
+        "native": (272, 240),
+        "touch_native": (272, 240),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    "fmsx": {
+        "native": (272, 240),
+        "touch_native": (272, 240),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # PALM OS - Full touchscreen PDA
+    # =========================================================================
+    "mu": {
+        "native": (160, 220),
+        "touch_native": (160, 220),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "handheld_touch",
+    },
+    # =========================================================================
+    # SHARP X68000 - Mouse-based computer
+    # =========================================================================
+    "px68k": {
+        "native": (768, 512),
+        "touch_native": (768, 512),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "full_screen_pointer",
+    },
+    # =========================================================================
+    # SEGA DREAMCAST - Light gun (Seaman microphone, but also DC Gun games)
+    # =========================================================================
+    "flycast": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
+    },
+    "reicast": {
+        "native": (640, 480),
+        "touch_native": (640, 480),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "light_gun",
     },
 }
 
@@ -777,29 +1268,47 @@ class RetroArchInstance:
     def _calculate_game_crop(self) -> tuple[int, int, int, int]:
         """Calculate crop region to remove black bars around the game.
 
-        RetroArch scales the game to fit the screen while maintaining
-        aspect ratio, centering it with black bars on sides or top/bottom.
+        In landscape mode: RetroArch scales the game to fit the screen while
+        maintaining aspect ratio, centering it with black bars.
+
+        In portrait mode: Game fills width and is aligned to top, height is
+        calculated from aspect ratio.
 
         Returns:
             Tuple of (width, height, x_offset, y_offset) for the game area.
         """
-        # Get native aspect ratio for this core
-        native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
-        native_ratio = native[0] / native[1]
-        screen_ratio = self.width / self.height
-
-        if native_ratio > screen_ratio:
-            # Game is wider than screen - black bars on top/bottom
-            game_width = self.width
-            game_height = int(self.width / native_ratio)
+        # Get native aspect ratio - check CORE_POINTER_ZONES first, then CORE_ASPECT_RATIOS
+        zone = CORE_POINTER_ZONES.get(self.core)
+        if zone and "native" in zone:
+            native = zone["native"]
         else:
-            # Game is taller than screen - black bars on sides
-            game_height = self.height
-            game_width = int(self.height * native_ratio)
+            native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
 
-        # Center position
-        x_offset = (self.width - game_width) // 2
-        y_offset = (self.height - game_height) // 2
+        native_ratio = native[0] / native[1]
+        is_portrait = self.height > self.width
+
+        if is_portrait:
+            # Portrait mode: game fills width, aligned to top
+            game_width = self.width
+            game_height = native[1] * self.width // native[0]
+            x_offset = 0
+            y_offset = 0
+        else:
+            # Landscape mode: game centered with letterboxing
+            screen_ratio = self.width / self.height
+
+            if native_ratio > screen_ratio:
+                # Game is wider than screen - black bars on top/bottom
+                game_width = self.width
+                game_height = int(self.width / native_ratio)
+            else:
+                # Game is taller than screen - black bars on sides
+                game_height = self.height
+                game_width = int(self.height * native_ratio)
+
+            # Center position
+            x_offset = (self.width - game_width) // 2
+            y_offset = (self.height - game_height) // 2
 
         return game_width, game_height, x_offset, y_offset
 
@@ -1139,16 +1648,73 @@ class RetroArchInstance:
     def _calculate_touchscreen_region(
         self
     ) -> Optional[tuple]:
-        """Calculate touchscreen region for DS/3DS cores.
+        """Calculate pointer/touchscreen region based on core type.
+
+        Uses CORE_POINTER_ZONES to determine the touchable area for
+        multi-screen consoles (DS, 3DS), motion controllers (Wii),
+        light guns, and mouse-based systems.
 
         Returns:
-            Tuple of (x_offset, y_offset, width_ratio, height_ratio,
-            native_width, native_height, offset_pixels) for touchscreen
-            cores, or None for non-touchscreen cores.
+            Tuple of (x_offset, y_offset, width_ratio, height_ratio)
+            representing the normalized region where pointer input maps,
+            or None if core doesn't need special pointer handling.
         """
-        if self.core not in TOUCHSCREEN_REGIONS:
+        zone = CORE_POINTER_ZONES.get(self.core)
+        if not zone:
             return None
-        return TOUCHSCREEN_REGIONS[self.core].get("vertical")
+
+        # Get white zone values (areas that are NOT touchable)
+        wz_top = zone.get("white_zone_top", 0.0)
+        wz_bottom = zone.get("white_zone_bottom", 0.0)
+        wz_left = zone.get("white_zone_left", 0.0)
+        wz_right = zone.get("white_zone_right", 0.0)
+
+        # Calculate touch region from white zones
+        # x_offset = left white zone
+        # y_offset = top white zone
+        # width_ratio = 1 - left - right white zones
+        # height_ratio = 1 - top - bottom white zones
+        x_offset = wz_left
+        y_offset = wz_top
+        width_ratio = 1.0 - wz_left - wz_right
+        height_ratio = 1.0 - wz_top - wz_bottom
+
+        # For dual-screen consoles in portrait mode, recalculate based on
+        # the actual video layout (game aligned to top, fills width)
+        is_portrait = self.height > self.width
+        zone_type = zone.get("type", "")
+
+        if is_portrait and zone_type == "dual_screen":
+            # In portrait mode, the game video fills the screen width
+            # and is aligned to top. The touch area is the bottom portion.
+            native = zone.get("native", (256, 384))
+            touch_native = zone.get("touch_native", (256, 192))
+
+            # Calculate the video height based on aspect ratio
+            video_height = native[1] * self.width // native[0]
+
+            # Touch screen starts after top screen
+            # For DS: top screen is 192px, touch is 192px (50% each)
+            touch_start_ratio = (native[1] - touch_native[1]) / native[1]
+
+            # The touch area in xvfb coordinates:
+            # y starts at touch_start_ratio of the video height
+            # But we need to express this as a fraction of the FULL xvfb height
+            video_y_ratio = video_height / self.height
+            touch_y_start = touch_start_ratio * video_y_ratio
+
+            # Width may be narrower for 3DS (bottom screen is 320 vs 400)
+            touch_width_ratio = touch_native[0] / native[0]
+            x_offset = (1.0 - touch_width_ratio) / 2.0  # Center horizontally
+
+            return (
+                x_offset,
+                touch_y_start,
+                touch_width_ratio,
+                (1.0 - touch_start_ratio) * video_y_ratio,
+            )
+
+        return (x_offset, y_offset, width_ratio, height_ratio)
 
     def _map_key_to_x11(
         self,
