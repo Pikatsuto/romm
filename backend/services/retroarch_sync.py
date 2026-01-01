@@ -7,6 +7,7 @@ directories and the RomM database/filesystem.
 
 import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,16 @@ fs_assets_handler = FSAssetsHandler()
 def _get_rom_name_from_path(rom_path: str) -> str:
     """Extract ROM name without extension from path."""
     return Path(rom_path).stem
+
+
+def _strip_timestamp_from_filename(filename: str) -> str:
+    """Remove timestamp suffix from filename.
+
+    Converts 'ROMName_20260101_044850.state0' to 'ROMName.state0'.
+    """
+    # Pattern: _YYYYMMDD_HHMMSS before extension
+    pattern = r"_\d{8}_\d{6}(\.\w+)$"
+    return re.sub(pattern, r"\1", filename)
 
 
 def restore_save_to_session(

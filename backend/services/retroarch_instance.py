@@ -156,7 +156,7 @@ class RetroArchInstance:
             bool: True if RetroArch started successfully, False otherwise.
         """
         try:
-            # Note: session directories are created by the daemon before start()
+            # Note: session directories are created by daemon before start()
             # to allow restoring saves/states before RetroArch starts
 
             # Create GStreamer source and setup PulseAudio
@@ -183,7 +183,6 @@ class RetroArchInstance:
                 shutil.copy2(pre_generated, core_options_path)
 
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
-            logger.info(f"Creating RetroArch config with states_dir={self.states_dir}")
             with open(config_path, "w") as f:
                 f.write('#include "/etc/retroarch.cfg"\n')
                 f.write('input_auto_mouse_grab = "false"\n')
@@ -201,9 +200,8 @@ class RetroArchInstance:
                 f.write('notification_show_screenshot = "true"\n')
                 f.write('input_screenshot = "f8"\n')
 
-                # State slot setting (auto-load disabled, we use LOAD_STATE command instead)
+                # State slot
                 f.write('state_slot = "0"\n')
-                f.write('savestate_auto_load = "false"\n')
 
                 # Video settings
                 f.write('video_driver = "gl"\n')
@@ -257,12 +255,6 @@ class RetroArchInstance:
 
             pid = self.retroarch_process.pid
             logger.info(f"Started RetroArch (PID: {pid})")
-
-            # Load initial state if one was restored
-            if self.state_path:
-                # Wait for RetroArch and the game to fully initialize
-                await asyncio.sleep(3.0)
-                await self._send_retroarch_command("LOAD_STATE")
 
             # Start GStreamer streaming
             self.gstreamer.start()
@@ -589,10 +581,10 @@ class RetroArchInstance:
             await self._send_retroarch_command(retroarch_cmd)
 
             # For SAVESTATE or SAVE_AND_QUIT,
-            # capture a screenshot with matching filename
+            # rename state file with timestamp and capture screenshot
             if command in ("SAVESTATE", "SAVE_AND_QUIT"):
                 await asyncio.sleep(0.3)  # Wait for state file to be written
-                await self._capture_state_screenshot()
+                await self._rename_state_with_timestamp()
 
             if command == "SAVE_AND_QUIT":
                 await asyncio.sleep(0.2)
@@ -650,6 +642,61 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to find latest state file: {e}")
             return None
+
+    async def _rename_state_with_timestamp(self):
+        """Rename state file with timestamp and capture associated screenshot.
+
+        After a manual SAVESTATE, rename the state file to include a timestamp
+        (e.g., ROMName_20260101_044850.state) to preserve multiple saves.
+        Also captures a screenshot with matching name.
+        """
+        try:
+            # Find the most recent state file
+            state_file = self._get_latest_state_file()
+            if not state_file:
+                logger.warning("No state file found to rename")
+                return
+
+            rom_name = Path(self.rom_path).stem
+            original_ext = state_file.suffix  # e.g., ".state", ".state0", etc.
+
+            # Generate timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_state_name = f"{rom_name}_{timestamp}{original_ext}"
+            new_state_path = self.states_dir / new_state_name
+
+            # Rename state file
+            state_file.rename(new_state_path)
+            logger.info(f"Renamed state to: {new_state_name}")
+
+            # Capture screenshot with matching name
+            screenshot_name = f"{rom_name}_{timestamp}.png"
+            screenshot_path = self.screenshots_dir / screenshot_name
+
+            env = self._get_xdotool_env()
+            game_w, game_h, x_off, y_off = self._calculate_game_crop()
+            crop_geometry = f"{game_w}x{game_h}+{x_off}+{y_off}"
+
+            proc = await asyncio.create_subprocess_exec(
+                "import",
+                "-window", "root",
+                "-crop", crop_geometry,
+                "+repage",
+                str(screenshot_path),
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"State screenshot failed: {stderr.decode()}")
+                return
+
+            logger.info(f"State screenshot saved: {screenshot_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to rename state with timestamp: {e}")
 
     async def _capture_state_screenshot(self):
         """Capture a screenshot and save it with association.
