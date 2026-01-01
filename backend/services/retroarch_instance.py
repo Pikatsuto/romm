@@ -43,6 +43,19 @@ TOUCHSCREEN_REGIONS = {
     },
 }
 
+# Native aspect ratios for cores (width, height)
+CORE_ASPECT_RATIOS = {
+    "desmume": (256, 384),  # DS: two 256x192 screens stacked
+    "melonds": (256, 384),
+    "mgba": (240, 160),     # GBA
+    "gambatte": (160, 144), # GB/GBC
+    "snes9x": (256, 224),   # SNES
+    "fceumm": (256, 240),   # NES
+    "genesis_plus_gx": (320, 224),  # Genesis/Mega Drive
+    "nestopia": (256, 240), # NES
+    "mesen": (256, 240),    # NES
+}
+
 
 class RetroArchInstance:
     """Manages a single RetroArch instance with WebRTC streaming.
@@ -141,6 +154,10 @@ class RetroArchInstance:
             if pre_generated.exists() and not core_options_path.exists():
                 shutil.copy2(pre_generated, core_options_path)
 
+            # Create screenshot directory
+            screenshot_dir = Path("/tmp/retroarch/screenshots")
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
                 f.write('#include "/etc/retroarch.cfg"\n')
@@ -152,6 +169,11 @@ class RetroArchInstance:
                 f.write('network_cmd_port = "55355"\n')
                 f.write('stdin_cmd_enable = "true"\n')
 
+                # Screenshot settings
+                f.write(f'screenshot_directory = "{screenshot_dir}"\n')
+                f.write('notification_show_screenshot = "true"\n')
+                f.write('input_screenshot = "f8"\n')
+
                 # Video settings
                 f.write('video_driver = "gl"\n')
                 f.write('video_threaded = "true"\n')
@@ -160,6 +182,7 @@ class RetroArchInstance:
                 f.write('video_shader_enable = "false"\n')
                 f.write('video_smooth = "false"\n')
                 f.write('video_max_swapchain_images = "2"\n')
+                f.write('video_font_enable = "true"\n')
 
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
@@ -485,7 +508,7 @@ class RetroArchInstance:
     async def execute_command(
         self,
         command: str
-    ):
+    ) -> Optional[bytes]:
         """Execute a RetroArch command.
 
         Sends a control command to RetroArch via UDP network commands.
@@ -495,11 +518,15 @@ class RetroArchInstance:
         Args:
             command: Command name (SAVESTATE, LOADSTATE, SCREENSHOT,
                 PAUSE_TOGGLE, RESET, or SAVE_AND_QUIT).
+
+        Returns:
+            For SCREENSHOT command, returns the screenshot bytes if successful.
+            For other commands, returns None.
         """
         try:
             if command == "RESET":
                 await self.restart()
-                return
+                return None
 
             command_map = {
                 "SAVESTATE": "SAVE_STATE",
@@ -512,7 +539,13 @@ class RetroArchInstance:
             retroarch_cmd = command_map.get(command)
             if not retroarch_cmd:
                 logger.warning(f"Unknown command: {command}")
-                return
+                return None
+
+            # For SCREENSHOT, capture the file created by RetroArch
+            if command == "SCREENSHOT":
+                screenshot_data = await self._take_screenshot()
+                self.last_activity = datetime.now()
+                return screenshot_data
 
             await self._send_retroarch_command(retroarch_cmd)
 
@@ -521,9 +554,89 @@ class RetroArchInstance:
                 await self._send_retroarch_command("QUIT")
 
             self.last_activity = datetime.now()
+            return None
 
         except Exception as e:
             logger.error(f"Failed to execute command {command}: {e}")
+            return None
+
+    def _calculate_game_crop(self) -> tuple[int, int, int, int]:
+        """Calculate crop region to remove black bars around the game.
+
+        RetroArch scales the game to fit the screen while maintaining
+        aspect ratio, centering it with black bars on sides or top/bottom.
+
+        Returns:
+            Tuple of (width, height, x_offset, y_offset) for the game area.
+        """
+        # Get native aspect ratio for this core
+        native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
+        native_ratio = native[0] / native[1]
+        screen_ratio = self.width / self.height
+
+        if native_ratio > screen_ratio:
+            # Game is wider than screen - black bars on top/bottom
+            game_width = self.width
+            game_height = int(self.width / native_ratio)
+        else:
+            # Game is taller than screen - black bars on sides
+            game_height = self.height
+            game_width = int(self.height * native_ratio)
+
+        # Center position
+        x_offset = (self.width - game_width) // 2
+        y_offset = (self.height - game_height) // 2
+
+        return game_width, game_height, x_offset, y_offset
+
+    async def _take_screenshot(self) -> Optional[bytes]:
+        """Take a screenshot of the Xvfb display.
+
+        Uses ImageMagick's 'import' command to capture the Xvfb display
+        directly, then crops to the game area to remove black bars.
+
+        Returns:
+            Screenshot image bytes (PNG format), or None on failure.
+        """
+        try:
+            env = self._get_xdotool_env()
+            screenshot_path = f"/tmp/screenshot_{self.session_id}.png"
+
+            # Calculate crop region to remove black bars
+            game_w, game_h, x_off, y_off = self._calculate_game_crop()
+            crop_geometry = f"{game_w}x{game_h}+{x_off}+{y_off}"
+
+            # Capture and crop in one command
+            proc = await asyncio.create_subprocess_exec(
+                "import",
+                "-window", "root",
+                "-crop", crop_geometry,
+                "+repage",
+                screenshot_path,
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"Screenshot failed: {stderr.decode()}")
+                return None
+
+            # Read and return the screenshot data
+            screenshot_file = Path(screenshot_path)
+            if not screenshot_file.exists():
+                logger.warning("Screenshot file not created")
+                return None
+
+            screenshot_data = screenshot_file.read_bytes()
+            screenshot_file.unlink()  # Clean up
+            logger.info(f"Screenshot captured: {len(screenshot_data)} bytes")
+            return screenshot_data
+
+        except Exception as e:
+            logger.error(f"Failed to take screenshot: {e}")
+            return None
 
     def _update_config_line(
         self,

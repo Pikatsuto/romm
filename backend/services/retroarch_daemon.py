@@ -265,7 +265,15 @@ class RetroArchDaemon:
         if channel == command_channel:
             command = data.get("command")
             if command:
-                await instance.execute_command(command)
+                result = await instance.execute_command(command)
+                # For SCREENSHOT command, publish the screenshot data
+                if command == "SCREENSHOT" and result:
+                    import base64
+                    screenshot_b64 = base64.b64encode(result).decode("utf-8")
+                    await async_cache.publish(
+                        f"retroarch:screenshot:{instance.session_id}",
+                        json.dumps({"screenshot": screenshot_b64}),
+                    )
         elif channel == option_channel:
             option_name = data.get("option_name")
             option_value = data.get("option_value")

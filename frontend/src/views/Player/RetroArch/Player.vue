@@ -19,6 +19,7 @@ import { useRouter } from "vue-router";
 import type { SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
 import retroarchApi from "@/services/api/retroarch";
+import screenshotApi from "@/services/api/screenshot";
 import storeConfig from "@/stores/config";
 import type { DetailedRom } from "@/stores/roms";
 import { io, Socket } from "socket.io-client";
@@ -81,6 +82,8 @@ const coreOptions = ref<Record<string, string>>({});
 
 /** Whether pointer is locked to video element (for touchscreen input) */
 const isPointerLocked = ref(false);
+/** Whether to show the screenshot flash animation */
+const showFlash = ref(false);
 /** Virtual mouse X position in pixels when pointer locked */
 const virtualMouseX = ref(0);
 /** Virtual mouse Y position in pixels when pointer locked */
@@ -280,7 +283,56 @@ function connectSocket(): Promise<void> {
         coreOptions.value = data.core_options;
       }
     });
+
+    // Listen for screenshot data from backend
+    socket.value.on("retroarch-screenshot", async (data: { session_id: string; screenshot: string }) => {
+      if (data.session_id === sessionId.value && data.screenshot) {
+        await handleScreenshotReceived(data.screenshot);
+      }
+    });
   });
+}
+
+async function handleScreenshotReceived(screenshotBase64: string) {
+  try {
+    // Convert base64 to blob
+    const byteCharacters = atob(screenshotBase64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "image/png" });
+
+    // Create a File object with timestamp name
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `screenshot-${props.rom.name}-${timestamp}.png`;
+    const file = new File([blob], filename, { type: "image/png" });
+
+    // Download the screenshot
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    // Upload screenshot to RomM
+    const results = await screenshotApi.uploadScreenshots({
+      rom: props.rom,
+      screenshotsToUpload: [{ screenshotFile: file }],
+    });
+
+    // Check if upload was successful
+    const result = results[0];
+    if (result.status === "fulfilled") {
+      console.log("[RetroArch] Screenshot saved successfully:", result.value);
+    } else {
+      console.error("[RetroArch] Failed to save screenshot:", result.reason);
+    }
+  } catch (err) {
+    console.error("[RetroArch] Error processing screenshot:", err);
+  }
 }
 
 async function stopSession() {
@@ -505,6 +557,12 @@ function handleRestart() {
 }
 
 function handleScreenshot() {
+  // Trigger flash animation
+  showFlash.value = true;
+  setTimeout(() => {
+    showFlash.value = false;
+  }, 150);
+
   sendCommand("SCREENSHOT");
 }
 
@@ -602,6 +660,9 @@ function handleSettingsChanged(newSettings: any) {
         Gamepad Connected
       </v-chip>
     </div>
+
+    <!-- Screenshot Flash Overlay -->
+    <div v-if="showFlash" class="screenshot-flash" />
   </div>
 </template>
 
@@ -661,5 +722,26 @@ function handleSettingsChanged(newSettings: any) {
   left: 1rem;
   z-index: 90;
   opacity: 0.9;
+}
+
+.screenshot-flash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  pointer-events: none;
+  z-index: 100;
+  animation: flash-fade 150ms ease-out forwards;
+}
+
+@keyframes flash-fade {
+  0% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 </style>

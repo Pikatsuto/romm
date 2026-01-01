@@ -374,7 +374,7 @@ async def retroarch_command(sid: str, data: dict):
     - SAVESTATE: Save state
     - LOADSTATE: Load state
     - RESET: Restart game
-    - SCREENSHOT: Take screenshot
+    - SCREENSHOT: Take screenshot (returns screenshot data via socket)
     - PAUSE_TOGGLE: Pause/Resume game
     - SAVE_AND_QUIT: Save state and exit
 
@@ -396,6 +396,40 @@ async def retroarch_command(sid: str, data: dict):
         f"retroarch:command:{session_id}",
         json.dumps({"command": command}),
     )
+
+    # For SCREENSHOT command, wait for the screenshot data and send it back
+    if command == "SCREENSHOT":
+        pubsub = async_cache.pubsub()
+        channel = f"retroarch:screenshot:{session_id}"
+
+        try:
+            await pubsub.subscribe(channel)
+            # Wait for screenshot data (max 5 seconds)
+            for _ in range(50):
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=0.1
+                )
+                if message and message["type"] == "message":
+                    try:
+                        screenshot_data = json.loads(message["data"])
+                        # Send screenshot to client
+                        await netplay_socket_handler.socket_server.emit(
+                            "retroarch-screenshot",
+                            {
+                                "session_id": session_id,
+                                "screenshot": screenshot_data.get("screenshot"),
+                            },
+                            to=sid,
+                        )
+                        break
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            import logging
+            logging.error(f"Error waiting for screenshot: {e}")
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
 
 
 @netplay_socket_handler.socket_server.on("retroarch-set-core-option")  # type: ignore

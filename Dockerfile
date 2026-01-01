@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     retroarch \
     netcat-openbsd \
     xdotool \
+    imagemagick \
     x11-xserver-utils \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
