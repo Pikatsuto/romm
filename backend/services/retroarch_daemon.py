@@ -580,6 +580,10 @@ class RetroArchDaemon:
             instance = self.instances[session_id]
             display_num = instance.display_num
 
+            # Capture screenshot for auto-save before syncing
+            if instance.retroarch_process and instance.retroarch_process.poll() is None:
+                await instance._capture_state_screenshot()
+
             # Sync saves/states to RomM before stopping
             self._sync_session(session_id)
 

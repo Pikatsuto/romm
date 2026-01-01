@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -109,11 +110,9 @@ def restore_state_to_session(
             logger.warning(f"State file not found: {source_path}")
             return None
 
-        # Preserve the original extension from the saved state
-        # RetroArch uses .state, .state0, .state1, etc. depending on slot
+        # Restore as .state.auto for RetroArch's savestate_auto_load to find it
         rom_name = _get_rom_name_from_path(rom_path)
-        original_ext = state.file_extension  # e.g., ".state0", ".state", etc.
-        dest_filename = f"{rom_name}{original_ext}"
+        dest_filename = f"{rom_name}.state.auto"
         dest_path = session_states_dir / dest_filename
 
         shutil.copy2(source_path, dest_path)
@@ -271,23 +270,36 @@ def sync_states_to_romm(
                 continue
 
             # Only sync .state files (RetroArch save states)
-            if not state_file.suffix.startswith(".state"):
+            # Check for .state anywhere in name (handles .state0, .state.auto, etc.)
+            if ".state" not in state_file.name:
                 continue
 
             try:
-                dest_file = dest_abs_path / state_file.name
+                # For auto-save (.state.auto), keep the name as-is (unique, overwrites)
+                # For files with timestamp (ROMName_YYYYMMDD_HHMMSS.*), sync as-is
+                # For plain .state0 without timestamp, skip (RetroArch's working file)
+                if state_file.name.endswith(".state.auto"):
+                    dest_name = state_file.name
+                elif re.search(r"_\d{8}_\d{6}\.", state_file.name):
+                    # Has timestamp, sync as-is
+                    dest_name = state_file.name
+                else:
+                    # Plain .state0 is RetroArch's working file, skip it
+                    continue
+
+                dest_file = dest_abs_path / dest_name
                 shutil.copy2(state_file, dest_file)
 
-                # Check if state already exists in DB
+                # Check if state already exists in DB (by original name for auto-save)
                 existing_state = db_state_handler.get_state_by_filename(
                     user_id=user_id,
                     rom_id=rom_id,
-                    file_name=state_file.name,
+                    file_name=dest_name,
                 )
 
                 file_size = state_file.stat().st_size
-                file_ext = state_file.suffix
-                file_name_no_ext = state_file.stem
+                file_ext = Path(dest_name).suffix
+                file_name_no_ext = Path(dest_name).stem
 
                 if existing_state:
                     # Update existing state
@@ -302,8 +314,8 @@ def sync_states_to_romm(
                 else:
                     # Create new state record
                     new_state = State(
-                        file_name=state_file.name,
-                        file_name_no_tags=state_file.name,
+                        file_name=dest_name,
+                        file_name_no_tags=dest_name,
                         file_name_no_ext=file_name_no_ext,
                         file_extension=file_ext,
                         file_path=dest_rel_path,
@@ -313,7 +325,7 @@ def sync_states_to_romm(
                         emulator=emulator,
                     )
                     db_state_handler.add_state(new_state)
-                    logger.debug(f"Created new state: {state_file.name}")
+                    logger.debug(f"Created new state: {dest_name}")
 
                 synced_count += 1
 

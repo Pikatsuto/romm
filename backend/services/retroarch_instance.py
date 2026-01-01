@@ -200,8 +200,13 @@ class RetroArchInstance:
                 f.write('notification_show_screenshot = "true"\n')
                 f.write('input_screenshot = "f8"\n')
 
-                # State slot
+                # State slot, auto-save and auto-load
                 f.write('state_slot = "0"\n')
+                f.write('savestate_auto_save = "true"\n')
+                if self.state_path:
+                    f.write('savestate_auto_load = "true"\n')
+                else:
+                    f.write('savestate_auto_load = "false"\n')
 
                 # Video settings
                 f.write('video_driver = "gl"\n')
@@ -580,11 +585,12 @@ class RetroArchInstance:
 
             await self._send_retroarch_command(retroarch_cmd)
 
-            # For SAVESTATE or SAVE_AND_QUIT,
-            # rename state file with timestamp and capture screenshot
+            # For SAVESTATE or SAVE_AND_QUIT, capture screenshot
+            # State file stays as .state0 for LOADSTATE to work
+            # Timestamping happens during sync to RomM
             if command in ("SAVESTATE", "SAVE_AND_QUIT"):
-                await asyncio.sleep(0.3)  # Wait for state file to be written
-                await self._rename_state_with_timestamp()
+                await asyncio.sleep(1.0)  # Wait for state file to be written
+                await self._capture_manual_save_screenshot()
 
             if command == "SAVE_AND_QUIT":
                 await asyncio.sleep(0.2)
@@ -649,12 +655,18 @@ class RetroArchInstance:
         After a manual SAVESTATE, rename the state file to include a timestamp
         (e.g., ROMName_20260101_044850.state) to preserve multiple saves.
         Also captures a screenshot with matching name.
+        Does NOT rename .state.auto files (auto-saves stay unique).
         """
         try:
             # Find the most recent state file
             state_file = self._get_latest_state_file()
             if not state_file:
                 logger.warning("No state file found to rename")
+                return
+
+            # Don't rename auto-save files
+            if state_file.name.endswith(".state.auto"):
+                logger.debug("Skipping rename for auto-save file")
                 return
 
             rom_name = Path(self.rom_path).stem
@@ -698,26 +710,73 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to rename state with timestamp: {e}")
 
-    async def _capture_state_screenshot(self):
-        """Capture a screenshot and save it with association.
+    async def _capture_manual_save_screenshot(self):
+        """Capture screenshot and copy state file with matching timestamp.
 
-        Associates screenshot with savestates via matching file_name_no_ext.
-        Screenshot is named after the ROM (e.g., GameName.png) to match states
-        (e.g., GameName.state0 has file_name_no_ext = GameName).
+        Finds the most recently modified state file and copies it with timestamp.
+        Both screenshot and state copy get the same timestamp so they match in RomM.
         """
         try:
-            # Find the latest state file to verify a state was created
+            rom_name = Path(self.rom_path).stem
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Find the most recently modified state file (any extension)
             state_file = self._get_latest_state_file()
-            if not state_file:
-                msg = "No state file found to associate screenshot with"
-                logger.warning(msg)
+
+            if state_file:
+                # Get original extension (e.g., .state0, .state.auto, .state1)
+                # For .state.auto, suffix is just ".auto", so handle specially
+                if state_file.name.endswith(".state.auto"):
+                    ext = ".state.auto"
+                else:
+                    ext = state_file.suffix  # .state0, .state1, etc.
+
+                timestamped_state = self.states_dir / f"{rom_name}_{timestamp}{ext}"
+                shutil.copy2(state_file, timestamped_state)
+                logger.info(f"Copied state: {timestamped_state.name}")
+            else:
+                logger.warning("No state file found in states directory")
+
+            # Take screenshot with same timestamp
+            screenshot_name = f"{rom_name}_{timestamp}.png"
+            screenshot_path = self.screenshots_dir / screenshot_name
+
+            env = self._get_xdotool_env()
+            game_w, game_h, x_off, y_off = self._calculate_game_crop()
+            crop_geometry = f"{game_w}x{game_h}+{x_off}+{y_off}"
+
+            proc = await asyncio.create_subprocess_exec(
+                "import",
+                "-window", "root",
+                "-crop", crop_geometry,
+                "+repage",
+                str(screenshot_path),
+                env=env,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                logger.error(f"Manual save screenshot failed: {stderr.decode()}")
                 return
 
-            # Generate screenshot filename: ROM name + .png
-            # State "GameName.state0" has file_name_no_ext="GameName"
-            # match "GameName.png" has file_name_no_ext="GameName"
+            logger.info(f"Manual save screenshot: {screenshot_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to capture manual save screenshot: {e}")
+
+    async def _capture_state_screenshot(self):
+        """Capture a screenshot for auto-save.
+
+        Screenshot is named to match the auto-save's file_name_no_ext.
+        For .state.auto files, file_name_no_ext is ROMName.state,
+        so screenshot is ROMName.state.png.
+        """
+        try:
             rom_name = Path(self.rom_path).stem
-            screenshot_name = f"{rom_name}.png"
+            # Screenshot matches auto-save's file_name_no_ext (ROMName.state)
+            screenshot_name = f"{rom_name}.state.png"
             screenshot_path = self.screenshots_dir / screenshot_name
 
             # Take screenshot
