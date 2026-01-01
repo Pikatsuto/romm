@@ -387,14 +387,20 @@ async def retroarch_command(sid: str, data: dict):
 
     session_id = data.get("session_id")
     command = data.get("command")
+    state_id = data.get("state_id")  # Optional: specific state ID to load
 
     if not session_id or not command:
         return
 
+    # Build command payload
+    command_payload = {"command": command}
+    if state_id is not None:
+        command_payload["state_id"] = state_id
+
     # Publish command to Redis for daemon to execute
     await async_cache.publish(
         f"retroarch:command:{session_id}",
-        json.dumps({"command": command}),
+        json.dumps(command_payload),
     )
 
     # For SCREENSHOT command, wait for the screenshot data and send it back

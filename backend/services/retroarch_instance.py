@@ -322,6 +322,7 @@ class RetroArchInstance:
             )
             transport.sendto(f"{command}\n".encode())
             transport.close()
+            logger.info(f"Sent RetroArch command: {command}")
             return None
         except Exception as e:
             logger.error(f"Failed to send RetroArch command '{command}': {e}")
@@ -543,7 +544,8 @@ class RetroArchInstance:
 
     async def execute_command(
         self,
-        command: str
+        command: str,
+        state_id: Optional[int] = None
     ) -> Optional[bytes]:
         """Execute a RetroArch command.
 
@@ -554,6 +556,9 @@ class RetroArchInstance:
         Args:
             command: Command name (SAVESTATE, LOADSTATE, SCREENSHOT,
                 PAUSE_TOGGLE, RESET, or SAVE_AND_QUIT).
+            state_id: Optional state ID to load (for LOADSTATE command).
+                If provided, fetches the state from RomM and copies it
+                to .state0 before loading.
 
         Returns:
             For SCREENSHOT command, returns the screenshot bytes if successful.
@@ -582,6 +587,14 @@ class RetroArchInstance:
                 screenshot_data = await self._take_screenshot()
                 self.last_activity = datetime.now()
                 return screenshot_data
+
+            # For LOADSTATE with state_id, fetch state from RomM and copy to .state
+            if command == "LOADSTATE" and state_id is not None:
+                await self._load_state_from_romm(state_id)
+                # File is fully synced to disk (fsync), no sleep needed
+                await self._send_retroarch_command(retroarch_cmd)
+                self.last_activity = datetime.now()
+                return None
 
             await self._send_retroarch_command(retroarch_cmd)
 
@@ -648,6 +661,49 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to find latest state file: {e}")
             return None
+
+    async def _load_state_from_romm(self, state_id: int) -> bool:
+        """Fetch a state from RomM and copy it to .state0 for loading.
+
+        Args:
+            state_id: ID of the state to load from RomM.
+
+        Returns:
+            True if state was fetched and copied successfully, False otherwise.
+        """
+        try:
+            from config import ASSETS_BASE_PATH
+            from handler.database import db_state_handler
+
+            # Get the state from database
+            state = db_state_handler.get_state_by_id(state_id)
+            if not state:
+                logger.warning(f"State {state_id} not found")
+                return False
+
+            source_path = Path(ASSETS_BASE_PATH) / state.full_path
+            if not source_path.exists():
+                logger.warning(f"State file not found: {source_path}")
+                return False
+
+            # Copy to .state for RetroArch to load (LOAD_STATE uses current slot)
+            rom_name = Path(self.rom_path).stem
+            dest_path = self.states_dir / f"{rom_name}.state"
+
+            # Use blocking copy with explicit file sync to ensure data is on disk
+            with open(source_path, "rb") as src:
+                data = src.read()
+            with open(dest_path, "wb") as dst:
+                dst.write(data)
+                dst.flush()
+                os.fsync(dst.fileno())
+
+            logger.info(f"Loaded state {state_id} to {dest_path} ({len(data)} bytes)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load state {state_id} from RomM: {e}")
+            return False
 
     async def _rename_state_with_timestamp(self):
         """Rename state file with timestamp and capture associated screenshot.

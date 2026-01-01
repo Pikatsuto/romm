@@ -15,7 +15,10 @@
  */
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from "vue";
+import { useDisplay } from "vuetify";
+import type { StateSchema } from "@/__generated__";
 import type { DetailedRom } from "@/stores/roms";
+import AssetCard from "@/components/common/Game/AssetCard.vue";
 
 /** Component props */
 const props = defineProps<{
@@ -29,6 +32,9 @@ const props = defineProps<{
   coreOptionsFromBackend: Record<string, string>;
 }>();
 
+/** Vuetify display breakpoints */
+const { mdAndUp } = useDisplay();
+
 /** Component events */
 const emit = defineEmits<{
   /** Toggle fullscreen mode */
@@ -37,6 +43,8 @@ const emit = defineEmits<{
   quickSave: [];
   /** Load the last quick save state */
   quickLoad: [];
+  /** Load a specific state by ID */
+  loadState: [stateId: number];
   /** Save state and exit to game details */
   saveAndQuit: [];
   /** Restart the emulated game */
@@ -56,6 +64,8 @@ const emit = defineEmits<{
 const showMenu = ref(false);
 /** Whether the settings dialog is open */
 const showSettings = ref(false);
+/** Whether the load state dialog is open */
+const showLoadStateDialog = ref(false);
 /** Current settings tab (video, audio, input, performance, core) */
 const settingsTab = ref("video");
 /** Whether the top menu bar is visible */
@@ -215,8 +225,18 @@ function handleQuickSave() {
 }
 
 function handleQuickLoad() {
-  emit("quickLoad");
-  closeMenu();
+  // Open the load state dialog to let user choose which state to load
+  showLoadStateDialog.value = true;
+  showMenu.value = false;
+}
+
+function handleStateSelected(state: StateSchema) {
+  emit("loadState", state.id);
+  showLoadStateDialog.value = false;
+}
+
+function closeLoadStateDialog() {
+  showLoadStateDialog.value = false;
 }
 
 function handleRestart() {
@@ -253,8 +273,8 @@ function showMenuBar() {
 }
 
 function hideMenuBar() {
-  // Don't hide if menu or settings dialog is open
-  if (showMenu.value || showSettings.value) return;
+  // Don't hide if any dialog is open
+  if (showMenu.value || showSettings.value || showLoadStateDialog.value) return;
   menuBarVisible.value = false;
 }
 
@@ -737,6 +757,59 @@ defineExpose({
           </v-window-item>
         </v-window>
       </v-card-text>
+    </v-card>
+  </v-dialog>
+
+  <!-- Load State Dialog -->
+  <v-dialog
+    v-model="showLoadStateDialog"
+    :width="mdAndUp ? '60vw' : '95vw'"
+    max-width="800"
+    @click:outside="closeLoadStateDialog"
+  >
+    <v-card>
+      <v-card-title class="d-flex align-center pa-4">
+        <v-icon class="mr-2">mdi-folder-open</v-icon>
+        Load State
+        <v-spacer />
+        <v-btn icon="mdi-close" variant="text" size="small" @click="closeLoadStateDialog" />
+      </v-card-title>
+
+      <v-divider />
+
+      <v-card-text class="pa-4" style="max-height: 60vh; overflow-y: auto;">
+        <v-row v-if="rom.user_states && rom.user_states.length > 0" no-gutters>
+          <v-col
+            v-for="state in rom.user_states"
+            :key="state.id"
+            cols="6"
+            sm="4"
+            md="3"
+            class="pa-1"
+          >
+            <AssetCard
+              :asset="state"
+              type="state"
+              :rom="rom"
+              :show-hover-actions="false"
+              @click="handleStateSelected(state)"
+            />
+          </v-col>
+        </v-row>
+        <div v-else class="text-center py-8">
+          <v-icon size="64" color="grey">mdi-file-question-outline</v-icon>
+          <p class="text-h6 mt-4 text-grey">No save states found</p>
+          <p class="text-body-2 text-grey">Create a save state first using Quick Save</p>
+        </div>
+      </v-card-text>
+
+      <v-divider />
+
+      <v-card-actions class="justify-center pa-3">
+        <v-btn variant="tonal" @click="closeLoadStateDialog">
+          Cancel
+        </v-btn>
+      </v-card-actions>
     </v-card>
   </v-dialog>
 </template>

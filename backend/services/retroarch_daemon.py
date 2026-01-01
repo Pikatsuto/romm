@@ -278,8 +278,9 @@ class RetroArchDaemon:
 
         if channel == command_channel:
             command = data.get("command")
+            state_id = data.get("state_id")  # Optional: specific state to load
             if command:
-                result = await instance.execute_command(command)
+                result = await instance.execute_command(command, state_id=state_id)
                 # For SCREENSHOT command, publish the screenshot data
                 if command == "SCREENSHOT" and result:
                     import base64

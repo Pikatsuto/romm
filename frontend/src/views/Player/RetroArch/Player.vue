@@ -552,6 +552,20 @@ function handleQuickLoad() {
   sendCommand("LOADSTATE");
 }
 
+function handleLoadState(stateId: number) {
+  // Send LOADSTATE command with state_id to load a specific state from RomM
+  if (!socket.value || !sessionId.value) {
+    console.error("[RetroArch] Cannot send command: socket or sessionId not available");
+    return;
+  }
+
+  socket.value.emit("retroarch-command", {
+    session_id: sessionId.value,
+    command: "LOADSTATE",
+    state_id: stateId,
+  });
+}
+
 function handleRestart() {
   sendCommand("RESET");
 }
@@ -645,6 +659,7 @@ function handleSettingsChanged(newSettings: any) {
       @fullscreen="gameControls.toggleFullscreen(containerRef)"
       @quick-save="handleQuickSave"
       @quick-load="handleQuickLoad"
+      @load-state="handleLoadState"
       @restart="handleRestart"
       @screenshot="handleScreenshot"
       @toggle-pause="handleTogglePause"

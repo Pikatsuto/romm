@@ -29,6 +29,14 @@ class DBStatesHandler(DBBaseHandler):
         return session.scalar(select(State).filter_by(user_id=user_id, id=id).limit(1))
 
     @begin_session
+    def get_state_by_id(
+        self,
+        id: int,
+        session: Session = None,  # type: ignore
+    ) -> State | None:
+        return session.scalar(select(State).filter_by(id=id).limit(1))
+
+    @begin_session
     def get_state_by_filename(
         self,
         user_id: int,
