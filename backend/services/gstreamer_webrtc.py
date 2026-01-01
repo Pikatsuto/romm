@@ -505,7 +505,8 @@ class GStreamerWebRTC:
             logger.error("webrtcbin not initialized")
             return False
 
-        GLib.idle_add(self.set_remote_description_in_glib(answer_sdp))
+        # Pass the function and argument separately - idle_add expects a callable
+        GLib.idle_add(lambda: self.set_remote_description_in_glib(answer_sdp))
         return True
 
     def add_ice_candidate(

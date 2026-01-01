@@ -26,8 +26,16 @@ from handler.redis_handler import async_cache
 
 from services.xvfb_manager import XvfbManager, calculate_optimal_resolution
 from services.retroarch_instance import RetroArchInstance
+from services.retroarch_sync import (
+    restore_save_to_session,
+    restore_state_to_session,
+    sync_session_to_romm,
+)
 
 logger = logging.getLogger(__name__)
+
+# Sync interval in seconds (5 minutes)
+SYNC_INTERVAL_SECONDS = 300
 
 
 class RetroArchDaemon:
@@ -58,6 +66,9 @@ class RetroArchDaemon:
         self.instances: dict[str, RetroArchInstance] = {}
         self.running = False
         self.cleanup_task: Optional[asyncio.Task] = None
+        self.sync_task: Optional[asyncio.Task] = None
+        # Store session metadata for sync (user_id, rom_id, platform_slug, core)
+        self.session_metadata: dict[str, dict] = {}
 
     async def start(
         self
@@ -72,6 +83,7 @@ class RetroArchDaemon:
 
         await self._subscribe_to_events()
         self.cleanup_task = asyncio.create_task(self._cleanup_loop())
+        self.sync_task = asyncio.create_task(self._sync_loop())
 
     async def stop(
         self
@@ -91,6 +103,9 @@ class RetroArchDaemon:
 
         if self.cleanup_task:
             self.cleanup_task.cancel()
+
+        if self.sync_task:
+            self.sync_task.cancel()
 
         logger.info("RetroArch streaming daemon stopped")
 
@@ -182,11 +197,10 @@ class RetroArchDaemon:
         """Handle Redis pubsub events."""
         while self.running:
             try:
-                for options in list(self.instances.items()):
-                    session_id, instance = options
-                    await self._check_webrtc_answer(*options)
+                for session_id, instance in list(self.instances.items()):
+                    await self._check_webrtc_answer(session_id, instance)
                     await self._check_stop_signal(session_id)
-                    await self._check_core_options_request(*options)
+                    await self._check_core_options_request(session_id, instance)
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error handling pubsub events: {e}")
@@ -412,6 +426,9 @@ class RetroArchDaemon:
                 await retroarch_handler.update_session_state(*retroarch_args)
                 return
 
+            # Determine state_path if state_id is provided
+            state_path = None
+
             instance = RetroArchInstance(
                 session_id=session.session_id,
                 rom_path=rom_path,
@@ -420,6 +437,37 @@ class RetroArchDaemon:
                 width=xvfb_width,
                 height=xvfb_height,
             )
+
+            # Create session directories BEFORE restoring saves/states
+            instance._setup_session_directories()
+
+            # Restore save from RomM if save_id is provided
+            if session.save_id:
+                restore_save_to_session(
+                    save_id=session.save_id,
+                    user_id=session.user_id,
+                    session_saves_dir=instance.saves_dir,
+                    rom_path=rom_path,
+                )
+
+            # Restore state from RomM if state_id is provided
+            if session.state_id:
+                state_path = restore_state_to_session(
+                    state_id=session.state_id,
+                    user_id=session.user_id,
+                    session_states_dir=instance.states_dir,
+                    rom_path=rom_path,
+                )
+                if state_path:
+                    instance.state_path = state_path
+
+            # Store session metadata for periodic sync
+            self.session_metadata[session.session_id] = {
+                "user_id": session.user_id,
+                "rom_id": session.rom_id,
+                "platform_slug": session.platform_slug,
+                "core": session.core,
+            }
 
             if not await instance.start():
                 await self.xvfb_manager.release_display(display_num)
@@ -482,13 +530,44 @@ class RetroArchDaemon:
                 session.session_id, SessionState.ERROR
             )
 
+    def _sync_session(self, session_id: str):
+        """Sync saves, states, and screenshots from a session to RomM.
+
+        Args:
+            session_id: Unique session identifier to sync.
+        """
+        if session_id not in self.instances:
+            return
+
+        instance = self.instances[session_id]
+        metadata = self.session_metadata.get(session_id)
+        if not metadata:
+            return
+
+        saves_synced, states_synced, screenshots_synced = sync_session_to_romm(
+            session_saves_dir=instance.saves_dir,
+            session_states_dir=instance.states_dir,
+            session_screenshots_dir=instance.screenshots_dir,
+            user_id=metadata["user_id"],
+            rom_id=metadata["rom_id"],
+            platform_slug=metadata["platform_slug"],
+            emulator=metadata["core"],
+        )
+
+        if saves_synced > 0 or states_synced > 0 or screenshots_synced > 0:
+            logger.info(
+                f"Synced {saves_synced} saves, {states_synced} states, "
+                f"{screenshots_synced} screenshots for session {session_id}"
+            )
+
     async def _stop_session(
         self,
         session_id: str
     ):
         """Stop a RetroArch streaming session.
 
-        Stops the RetroArch instance, releases the Xvfb display,
+        Syncs saves/states to RomM, stops the RetroArch instance,
+        releases the Xvfb display, cleans up the session directory,
         and updates the session state to STOPPED.
 
         Args:
@@ -501,13 +580,24 @@ class RetroArchDaemon:
             instance = self.instances[session_id]
             display_num = instance.display_num
 
+            # Sync saves/states to RomM before stopping
+            self._sync_session(session_id)
+
             await instance.stop()
+
+            # Cleanup session directory
+            instance.cleanup_session_dir()
+
             await self.xvfb_manager.release_display(display_num)
 
+            # Cleanup metadata
+            if session_id in self.session_metadata:
+                del self.session_metadata[session_id]
+
             del self.instances[session_id]
-            await retroarch_handler.update_session_state(
-                session_id, SessionState.STOPPED
-            )
+
+            # Delete session from Redis
+            await retroarch_handler.delete_session(session_id)
 
             logger.info(f"Session {session_id} stopped")
 
@@ -538,6 +628,26 @@ class RetroArchDaemon:
                 break
             except Exception as e:
                 logger.error(f"Error in cleanup loop: {e}")
+
+    async def _sync_loop(
+        self
+    ):
+        """Periodic sync of saves/states to RomM.
+
+        Runs every 5 minutes (SYNC_INTERVAL_SECONDS) to sync saves and states
+        from all active sessions to RomM storage.
+        """
+        while self.running:
+            try:
+                await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+
+                for session_id in list(self.instances.keys()):
+                    self._sync_session(session_id)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in sync loop: {e}")
 
 
 async def main():

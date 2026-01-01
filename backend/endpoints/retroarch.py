@@ -366,14 +366,11 @@ async def stop_stream(
     )
 
     # Signal daemon via Redis to stop the process
+    # The daemon will sync saves/states to RomM and delete the session
     stop_key = f"retroarch:stop:{data.session_id}"
     await async_cache.set(stop_key, "1", ex=10)  # Expire after 10s
 
-    # The daemon will delete the session when it processes the stop signal
-    # But we also delete it here to ensure cleanup
-    await retroarch_handler.delete_session(data.session_id)
-
-    return {"status": "ok", "message": "Session stopped"}
+    return {"status": "ok", "message": "Session stop signal sent"}
 
 
 @protected_route(router.post, "/input", [Scope.ASSETS_READ])
