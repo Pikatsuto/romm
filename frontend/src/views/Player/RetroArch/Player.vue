@@ -14,7 +14,7 @@
  * @component
  */
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import { useRouter } from "vue-router";
 import type { FirmwareSchema, SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
@@ -40,6 +40,8 @@ const props = defineProps<{
   core: string;
   /** Optional firmware/BIOS file to use */
   firmware: FirmwareSchema | null;
+  /** Whether to enter fullscreen when the player loads */
+  fullscreenOnPlay: boolean;
 }>();
 
 // Vue Router and store references
@@ -105,6 +107,17 @@ const gameControls = useGameControls(() =>
     ? { sessionId: sessionId.value, socket: socket.value }
     : null
 )
+
+// Watch for loading completion to trigger fullscreen if enabled
+watch(isLoading, async (loading: boolean) => {
+  if (!loading && !error.value && props.fullscreenOnPlay) {
+    // Wait for next tick to ensure containerRef is available
+    await nextTick();
+    if (containerRef.value) {
+      gameControls.toggleFullscreen(containerRef.value);
+    }
+  }
+});
 
 onMounted(async () => {
   document.addEventListener("pointerlockchange", handlePointerLockChange);

@@ -618,6 +618,7 @@ function openCacheDialog() {
           :save="selectedSave"
           :core="getRetroArchCoreName(selectedCore || '')"
           :firmware="selectedFirmware"
+          :fullscreen-on-play="fullScreenOnPlay"
         />
       </v-col>
     </template>
