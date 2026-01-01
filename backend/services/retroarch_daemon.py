@@ -436,6 +436,8 @@ class RetroArchDaemon:
             # Determine state_path if state_id is provided
             state_path = None
 
+            logger.info(f"[RetroArch Language Debug] Daemon creating instance with language: {session.language}")
+
             instance = RetroArchInstance(
                 session_id=session.session_id,
                 rom_path=rom_path,
@@ -443,6 +445,7 @@ class RetroArchDaemon:
                 display_num=display_num,
                 width=xvfb_width,
                 height=xvfb_height,
+                language=session.language,
             )
 
             # Create session directories BEFORE restoring saves/states

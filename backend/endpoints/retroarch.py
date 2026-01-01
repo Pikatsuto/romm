@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from config.config_manager import config_manager
 from decorators.auth import protected_route
 from handler.auth.constants import Scope
-from handler.database import db_rom_handler
+from handler.database import db_rom_handler, db_user_handler
 from handler.redis_handler import async_cache
 from handler.retroarch_handler import (
     MAX_SESSIONS_DEFAULT,
@@ -41,6 +41,8 @@ class StartSessionRequest(BaseModel):
     screen_width: int | None = None
     screen_height: int | None = None
     firmware_id: int | None = None
+    # User interface language (e.g., "en_US", "fr_FR")
+    language: str | None = None
 
 
 class TouchscreenRegion(BaseModel):
@@ -159,6 +161,16 @@ async def start_stream(
     # Create session in Redis
     from handler.retroarch_handler import RetroArchSession
 
+    # Get user's language preference from their UI settings
+    # request.user may not have ui_settings loaded, so fetch full user from DB
+    user_language = None
+    full_user = db_user_handler.get_user(request.user.id)
+    if full_user and full_user.ui_settings:
+        # ui_settings stores locale under "locale" key (see frontend useUISettings.ts collectSettings)
+        user_language = full_user.ui_settings.get("locale")
+
+    log.info(f"[RetroArch Language Debug] User: {request.user.username}, ui_settings: {full_user.ui_settings if full_user else None}, user_language: {user_language}")
+
     session = RetroArchSession(
         session_id=session_id,
         user_id=request.user.id,
@@ -168,6 +180,7 @@ async def start_stream(
         save_id=data.save_id,
         state_id=data.state_id,
         firmware_id=data.firmware_id,
+        language=user_language,
         state=SessionState.STARTING,
     )
 

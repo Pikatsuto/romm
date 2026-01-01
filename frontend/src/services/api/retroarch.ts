@@ -26,6 +26,8 @@ interface StartSessionRequest {
   screen_height?: number;
   /** Optional firmware/BIOS file ID to use */
   firmware_id?: number;
+  /** User interface language (e.g., "en_US", "fr_FR") */
+  language?: string;
 }
 
 /**
@@ -104,6 +106,7 @@ async function startSession({
   screenWidth,
   screenHeight,
   firmwareId,
+  language,
 }: {
   romId: number;
   core: string;
@@ -112,6 +115,7 @@ async function startSession({
   screenWidth?: number;
   screenHeight?: number;
   firmwareId?: number;
+  language?: string;
 }): Promise<{ data: StartSessionResponse }> {
   const requestData: StartSessionRequest = {
     rom_id: romId,
@@ -123,6 +127,7 @@ async function startSession({
   if (screenWidth) requestData.screen_width = screenWidth;
   if (screenHeight) requestData.screen_height = screenHeight;
   if (firmwareId) requestData.firmware_id = firmwareId;
+  if (language) requestData.language = language;
 
   return api.post("/retroarch/stream/start", requestData);
 }

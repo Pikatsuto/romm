@@ -47,6 +47,8 @@ class RetroArchSession:
     save_id: Optional[int] = None
     state_id: Optional[int] = None
     firmware_id: Optional[int] = None
+    # User interface language (e.g., "en_US", "fr_FR")
+    language: Optional[str] = None
 
     def __post_init__(self):
         """Initialize timestamps if not provided."""

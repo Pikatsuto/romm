@@ -56,6 +56,77 @@ CORE_ASPECT_RATIOS = {
     "mesen": (256, 240),    # NES
 }
 
+# Mapping from RomM locale codes to RetroArch numeric language codes
+# Based on RetroArch's intl/msg_hash_us.h enum retro_language
+ROMM_TO_RETROARCH_LANGUAGE = {
+    "en_US": 0,   # RETRO_LANGUAGE_ENGLISH
+    "en_GB": 0,   # RETRO_LANGUAGE_ENGLISH (fallback)
+    "ja_JP": 1,   # RETRO_LANGUAGE_JAPANESE
+    "fr_FR": 2,   # RETRO_LANGUAGE_FRENCH
+    "es_ES": 3,   # RETRO_LANGUAGE_SPANISH
+    "de_DE": 4,   # RETRO_LANGUAGE_GERMAN
+    "it_IT": 5,   # RETRO_LANGUAGE_ITALIAN
+    "pt_BR": 7,   # RETRO_LANGUAGE_PORTUGUESE_BRAZIL
+    "ru_RU": 9,   # RETRO_LANGUAGE_RUSSIAN
+    "ko_KR": 10,  # RETRO_LANGUAGE_KOREAN
+    "zh_TW": 11,  # RETRO_LANGUAGE_CHINESE_TRADITIONAL
+    "zh_CN": 12,  # RETRO_LANGUAGE_CHINESE_SIMPLIFIED
+    "pl_PL": 14,  # RETRO_LANGUAGE_POLISH
+    "cs_CZ": 27,  # RETRO_LANGUAGE_CZECH
+    "hu_HU": 30,  # RETRO_LANGUAGE_HUNGARIAN
+    "ro_RO": 32,  # RETRO_LANGUAGE_ROMANIAN
+}
+
+# Mapping from RomM locale codes to core-specific language option values
+# Each core has its own language option name and accepted values
+CORE_LANGUAGE_OPTIONS = {
+    # Nintendo DS cores
+    "desmume": {
+        "option_name": "desmume_firmware_language",
+        "values": {
+            "en_US": "English", "en_GB": "English",
+            "ja_JP": "Japanese", "fr_FR": "French",
+            "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian",
+        },
+        "default": "English",
+    },
+    "melonds": {
+        "option_name": "melonds_language",
+        "values": {
+            "en_US": "English", "en_GB": "English",
+            "ja_JP": "Japanese", "fr_FR": "French",
+            "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian",
+        },
+        "default": "English",
+    },
+    # Game Boy Advance
+    "mgba": {
+        "option_name": "mgba_gb_model",  # mGBA uses GB model, not direct language
+        "values": {},  # No direct language option
+        "default": None,
+    },
+    # SNES
+    "snes9x": {
+        "option_name": "snes9x_region",
+        "values": {
+            "en_US": "NTSC", "en_GB": "PAL",
+            "ja_JP": "NTSC", "fr_FR": "PAL",
+            "es_ES": "PAL", "de_DE": "PAL", "it_IT": "PAL",
+        },
+        "default": "auto",
+    },
+    # Genesis/Mega Drive
+    "genesis_plus_gx": {
+        "option_name": "genesis_plus_gx_region_detect",
+        "values": {
+            "en_US": "ntsc-u", "en_GB": "pal",
+            "ja_JP": "ntsc-j", "fr_FR": "pal",
+            "es_ES": "pal", "de_DE": "pal", "it_IT": "pal",
+        },
+        "default": "auto",
+    },
+}
+
 
 class RetroArchInstance:
     """Manages a single RetroArch instance with WebRTC streaming.
@@ -90,6 +161,7 @@ class RetroArchInstance:
         display_num: int = 99,
         width: int = 1280,
         height: int = 720,
+        language: Optional[str] = None,
     ):
         """Initialize a RetroArch instance.
 
@@ -102,6 +174,7 @@ class RetroArchInstance:
             display_num: X11 display number for Xvfb.
             width: Display width in pixels.
             height: Display height in pixels.
+            language: User interface language code (e.g., "en_US", "fr_FR").
         """
         self.session_id = session_id
         self.rom_path = rom_path
@@ -111,6 +184,7 @@ class RetroArchInstance:
         self.display_num = display_num
         self.width = width
         self.height = height
+        self.language = language
 
         self.retroarch_process: Optional[subprocess.Popen] = None
         self.gstreamer: Optional[GStreamerWebRTC] = None
@@ -137,7 +211,7 @@ class RetroArchInstance:
         logger.info(f"Created session directories at {self.session_dir}")
 
     def cleanup_session_dir(self):
-        """Remove the per-session tempor ary directory and all its contents."""
+        """Remove the per-session temporary directory and all its contents."""
         try:
             if self.session_dir.exists():
                 shutil.rmtree(self.session_dir)
@@ -145,6 +219,44 @@ class RetroArchInstance:
                 logger.info(msg)
         except Exception as e:
             logger.error(f"Failed to cleanup session directory: {e}")
+
+    def _write_core_language_option(
+        self,
+        config_path: Path,
+        option_name: str,
+        option_value: str
+    ):
+        """Write or update a core language option in the config file.
+
+        Args:
+            config_path: Path to the core options config file.
+            option_name: Core option name (e.g., "desmume_firmware_language").
+            option_value: Value to set (e.g., "French").
+        """
+        try:
+            lines = []
+            option_found = False
+
+            # Read existing file if it exists
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        new_line, found = self._update_config_line(
+                            line, option_name, option_value
+                        )
+                        lines.append(new_line)
+                        option_found = option_found or found
+
+            # Add option if not found
+            if not option_found:
+                lines.append(f'{option_name} = "{option_value}"\n')
+
+            # Write back
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+        except Exception as e:
+            logger.error(f"Failed to write core language option: {e}")
 
     async def start(
         self
@@ -183,6 +295,22 @@ class RetroArchInstance:
             pre_generated = Path("/app/romm/config/retroarch") / core_cfg
             if pre_generated.exists():
                 shutil.copy2(pre_generated, core_options_path)
+
+            # Set core-specific language option based on user's RomM language
+            if self.language and self.core.lower() in CORE_LANGUAGE_OPTIONS:
+                core_lang_config = CORE_LANGUAGE_OPTIONS[self.core.lower()]
+                option_name = core_lang_config["option_name"]
+                lang_value = core_lang_config["values"].get(
+                    self.language, core_lang_config["default"]
+                )
+                if lang_value:
+                    self._write_core_language_option(
+                        core_options_path, option_name, lang_value
+                    )
+                    logger.info(
+                        f"[RetroArch Language Debug] Set core option: "
+                        f"{option_name}={lang_value}"
+                    )
 
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
@@ -234,6 +362,14 @@ class RetroArchInstance:
                 f.write('game_specific_options = "false"\n')
                 f.write('auto_overrides_enable = "false"\n')
                 f.write('auto_remaps_enable = "false"\n')
+
+                # User interface language (synced from RomM user settings)
+                if self.language:
+                    ra_lang = ROMM_TO_RETROARCH_LANGUAGE.get(self.language, 0)
+                    logger.info(f"[RetroArch Language Debug] Instance writing config: language={self.language}, ra_lang={ra_lang}")
+                    f.write(f'user_language = "{ra_lang}"\n')
+                else:
+                    logger.info(f"[RetroArch Language Debug] Instance: no language set (self.language={self.language})")
 
             # Start RetroArch
             cmd = [

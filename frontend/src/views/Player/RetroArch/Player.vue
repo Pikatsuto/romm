@@ -21,6 +21,7 @@ import { ROUTES } from "@/plugins/router";
 import retroarchApi from "@/services/api/retroarch";
 import screenshotApi from "@/services/api/screenshot";
 import storeConfig from "@/stores/config";
+import storeLanguage from "@/stores/language";
 import type { DetailedRom } from "@/stores/roms";
 import { io, Socket } from "socket.io-client";
 import { storeToRefs } from "pinia";
@@ -45,6 +46,8 @@ const props = defineProps<{
 const router = useRouter();
 const configStore = storeConfig();
 const { config } = storeToRefs(configStore);
+const languageStore = storeLanguage();
+const { selectedLanguage } = storeToRefs(languageStore);
 
 // DOM element refs
 /** Video element for WebRTC stream display */
@@ -137,7 +140,7 @@ async function startSession() {
     const screenWidth = window.screen.width;
     const screenHeight = window.screen.height;
 
-    // Start session with screen dimensions
+    // Start session with screen dimensions and user language
     const { data } = await retroarchApi.startSession({
       romId: props.rom.id,
       core: props.core,
@@ -146,6 +149,7 @@ async function startSession() {
       screenWidth,
       screenHeight,
       firmwareId: props.firmware?.id,
+      language: selectedLanguage.value.value,
     });
 
     sessionId.value = data.session_id;
