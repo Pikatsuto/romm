@@ -21,6 +21,7 @@ import {
   getSupportedCores,
   isRetroArchCore,
   getRetroArchCoreName,
+  areCoresCompatible,
 } from "@/utils";
 import CacheDialog from "@/views/Player/EmulatorJS/CacheDialog.vue";
 import EJSPlayer from "@/views/Player/EmulatorJS/Player.vue";
@@ -49,7 +50,7 @@ const fullScreenOnPlay = useLocalStorage("emulation.fullScreenOnPlay", true);
 const compatibleStates = computed(
   () =>
     rom.value?.user_states.filter(
-      (s) => !s.emulator || s.emulator === selectedCore.value,
+      (s) => !s.emulator || areCoresCompatible(s.emulator, selectedCore.value),
     ) ?? [],
 );
 
@@ -160,7 +161,7 @@ watch(selectedCore, (newSelectedCore) => {
   if (
     selectedState.value &&
     selectedState.value.emulator &&
-    selectedState.value.emulator !== newSelectedCore
+    !areCoresCompatible(selectedState.value.emulator, newSelectedCore)
   ) {
     selectedState.value = null;
     localStorage.removeItem(`player:${rom.value?.platform_slug}:state_id`);
@@ -194,14 +195,14 @@ onMounted(async () => {
   emitter?.on("stateSelected", selectState);
 
   // Determine default tab and selection (mutually exclusive)
-  const compatibleStates = rom.value.user_states.filter(
-    (s) => !s.emulator || s.emulator === supportedCores.value[0],
+  const compatibleStatesOnMount = rom.value.user_states.filter(
+    (s) => !s.emulator || areCoresCompatible(s.emulator, supportedCores.value[0]),
   );
 
-  if (compatibleStates.length > 0) {
+  if (compatibleStatesOnMount.length > 0) {
     // If there are states, default to states tab with first state
     isSavesTabSelected.value = false;
-    selectedState.value = compatibleStates[0];
+    selectedState.value = compatibleStatesOnMount[0];
     selectedSave.value = null;
   } else if (rom.value.user_saves.length > 0) {
     // If no states but there are saves, default to saves tab with first save
@@ -356,11 +357,7 @@ function openCacheDialog() {
                   :prepend-icon="
                     selectedState ? 'mdi-swap-horizontal' : 'mdi-plus'
                   "
-                  :disabled="
-                    !rom.user_states.some(
-                      (s) => !s.emulator || s.emulator === selectedCore,
-                    )
-                  "
+                  :disabled="compatibleStates.length === 0"
                   @click="openStateDialog"
                 >
                   {{

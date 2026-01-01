@@ -783,6 +783,34 @@ export function getRetroArchCoreName(core: string): string {
 }
 
 /**
+ * Normalize a core/emulator name for comparison purposes.
+ * Removes the "ra-" prefix if present, making EmulatorJS and RetroArch
+ * cores with the same base name comparable (e.g., "ra-melonds" -> "melonds").
+ *
+ * @param core The core name (with or without "ra-" prefix).
+ * @returns The normalized core name.
+ */
+export function normalizeCoreName(core: string | null | undefined): string {
+  if (!core) return "";
+  return core.replace(/^ra-/, "");
+}
+
+/**
+ * Check if two cores are compatible (same base core name).
+ * Handles the "ra-" prefix difference between EmulatorJS and RetroArch.
+ *
+ * @param core1 First core name.
+ * @param core2 Second core name.
+ * @returns True if cores are compatible.
+ */
+export function areCoresCompatible(
+  core1: string | null | undefined,
+  core2: string | null | undefined
+): boolean {
+  return normalizeCoreName(core1) === normalizeCoreName(core2);
+}
+
+/**
  * Check if a given EJS core requires threads enabled.
  *
  * @param core The core name.
