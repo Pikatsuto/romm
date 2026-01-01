@@ -312,6 +312,10 @@ class RetroArchInstance:
                         f"{option_name}={lang_value}"
                     )
 
+            # Calculate height based on core aspect ratio
+            native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
+            portrait_height = native[1] * self.width // native[0]
+
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
                 f.write('#include "/etc/retroarch.cfg"\n')
@@ -349,6 +353,17 @@ class RetroArchInstance:
                 f.write('video_max_swapchain_images = "2"\n')
                 f.write('video_font_enable = "true"\n')
 
+                # Portrait mode: align game to top instead of center
+                is_portrait = self.height > self.width
+                if is_portrait:
+                    # Enable custom viewport and set position to top
+                    f.write('video_viewport_custom = "true"\n')
+                    f.write('custom_viewport_x = "0"\n')
+                    f.write('custom_viewport_y = "0"\n')
+                    f.write(f'custom_viewport_width = "{self.width}"\n')
+                    f.write(f'custom_viewport_height = "{portrait_height}"\n')
+                    f.write('aspect_ratio_index = "22"\n')  # 22 = Custom in RetroArch
+
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
                 f.write('audio_enable = "true"\n')
@@ -379,9 +394,13 @@ class RetroArchInstance:
                 config_path,
                 "-L",
                 f"/usr/lib/libretro/{self.core}_libretro.so",
-                "--fullscreen",
-                self.rom_path,
             ]
+            # Portrait mode: use --size to set window dimensions at top
+            if is_portrait:
+                cmd.append(f"--size={self.width}x{portrait_height}")
+            else:
+                cmd.append("--fullscreen")
+            cmd.append(self.rom_path)
 
             self.retroarch_process = subprocess.Popen(
                 cmd,

@@ -149,7 +149,7 @@ async function startSession() {
   try {
     statusMessage.value = "Starting RetroArch session...";
 
-    // Detect screen dimensions
+    // Detect screen dimensions (use physical screen size for real devices)
     const screenWidth = window.screen.width;
     const screenHeight = window.screen.height;
 
@@ -676,6 +676,7 @@ function handleSettingsChanged(newSettings: any) {
       :socket="socket"
       :core-options-from-backend="coreOptions"
       :is-fullscreen="gameControls.isFullscreen.value"
+      :container="containerRef"
       @fullscreen="gameControls.toggleFullscreen(containerRef)"
       @quick-save="handleQuickSave"
       @quick-load="handleQuickLoad"
@@ -712,6 +713,13 @@ function handleSettingsChanged(newSettings: any) {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Portrait mode: align video to top */
+@media (orientation: portrait) {
+  .retroarch-container {
+    align-items: flex-start;
+  }
 }
 
 .game-video {

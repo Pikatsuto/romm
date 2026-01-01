@@ -118,11 +118,15 @@ class XvfbDisplay:
         display_number: X11 display number (e.g., 99 for :99).
         process: The Xvfb subprocess handle.
         in_use: Whether display is currently allocated.
+        width: Display width in pixels.
+        height: Display height in pixels.
     """
 
     display_number: int
     process: subprocess.Popen
     in_use: bool = False
+    width: int = 1280
+    height: int = 720
 
 
 class XvfbManager:
@@ -155,22 +159,30 @@ class XvfbManager:
         self.lock = asyncio.Lock()
 
     def _find_reusable_display(
-        self
+        self,
+        width: int,
+        height: int
     ) -> Optional[int]:
         """Find an existing display that can be reused.
 
-        Searches for a display that is not currently in use and whose
-        Xvfb process is still running.
+        Searches for a display that is not currently in use, whose
+        Xvfb process is still running, and has matching resolution.
+
+        Args:
+            width: Required display width in pixels.
+            height: Required display height in pixels.
 
         Returns:
             Display number if a reusable display is found, None otherwise.
         """
         for display_num, display in self.displays.items():
             not_in_use = not display.in_use
-            is_available = not_in_use and display.process.poll() is None
+            process_running = display.process.poll() is None
+            resolution_matches = display.width == width and display.height == height
+            is_available = not_in_use and process_running and resolution_matches
             if is_available:
                 display.in_use = True
-                logger.info(f"Reusing Xvfb display :{display_num}")
+                logger.info(f"Reusing Xvfb display :{display_num} ({width}x{height})")
                 return display_num
         return None
 
@@ -248,6 +260,8 @@ class XvfbManager:
                 display_number=display_num,
                 process=process,
                 in_use=True,
+                width=width,
+                height=height,
             )
             res = f"{width}x{height}"
             logger.info(f"Created Xvfb display :{display_num} ({res})")
@@ -272,7 +286,7 @@ class XvfbManager:
             Display number if allocation succeeded, None otherwise.
         """
         async with self.lock:
-            reused = self._find_reusable_display()
+            reused = self._find_reusable_display(width, height)
             if reused is not None:
                 return reused
             return await self._create_new_display(width, height)

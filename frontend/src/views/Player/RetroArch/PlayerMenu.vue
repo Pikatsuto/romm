@@ -30,10 +30,19 @@ const props = defineProps<{
   isFullscreen: boolean;
   /** Core-specific options loaded from backend */
   coreOptionsFromBackend: Record<string, string>;
+  /** Container element for attaching dialogs (needed for fullscreen) */
+  container?: HTMLElement;
 }>();
 
 /** Vuetify display breakpoints */
 const { mdAndUp } = useDisplay();
+
+/** Portrait mode detection */
+const isPortrait = ref(window.innerHeight > window.innerWidth);
+
+function updateOrientation() {
+  isPortrait.value = window.innerHeight > window.innerWidth;
+}
 
 /** Component events */
 const emit = defineEmits<{
@@ -303,10 +312,13 @@ onMounted(() => {
   loadCoreOptions();
   // Start the auto-hide timer on mount
   resetHideMenuTimeout();
+  // Listen for orientation changes
+  window.addEventListener("resize", updateOrientation);
 });
 
 onUnmounted(() => {
   clearHideMenuTimeout();
+  window.removeEventListener("resize", updateOrientation);
 });
 
 // Expose handler to parent component
@@ -330,7 +342,11 @@ defineExpose({
       <v-chip size="x-small" color="primary" class="ml-2">{{ core }}</v-chip>
     </div>
 
-    <div class="menu-bar-right">
+    <div
+      class="menu-bar-right"
+      v-if="!isPortrait"
+    >
+      <!-- Hidden in portrait mode - accessible via menu -->
       <v-btn
         :icon="isPaused ? 'mdi-play' : 'mdi-pause'"
         size="small"
@@ -407,7 +423,7 @@ defineExpose({
   </div>
 
   <!-- Main Menu Modal -->
-  <v-dialog v-model="showMenu" max-width="500" @click:outside="closeMenu">
+  <v-dialog v-model="showMenu" max-width="500" :attach="container" @click:outside="closeMenu">
     <v-card class="menu-card">
       <v-card-title class="d-flex align-center pa-4">
         <v-icon class="mr-2">mdi-menu</v-icon>
@@ -453,6 +469,13 @@ defineExpose({
           <v-list-item-title>Settings</v-list-item-title>
         </v-list-item>
 
+        <v-list-item :prepend-icon="isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen'" @click="handleFullscreen(); closeMenu()">
+          <v-list-item-title>{{ isFullscreen ? 'Exit Fullscreen' : 'Fullscreen' }}</v-list-item-title>
+          <template #append>
+            <v-chip size="x-small" variant="outlined">F11</v-chip>
+          </template>
+        </v-list-item>
+
         <v-divider class="my-2" />
 
         <v-list-item prepend-icon="mdi-content-save-move" @click="handleSaveAndQuit">
@@ -471,7 +494,7 @@ defineExpose({
   </v-dialog>
 
   <!-- Settings Modal -->
-  <v-dialog v-model="showSettings" max-width="600" @click:outside="closeMenu">
+  <v-dialog v-model="showSettings" max-width="800" :attach="container" @click:outside="closeMenu">
     <v-card>
       <v-card-title class="d-flex align-center pa-4">
         <v-icon class="mr-2">mdi-cog</v-icon>
@@ -765,6 +788,7 @@ defineExpose({
     v-model="showLoadStateDialog"
     :width="mdAndUp ? '60vw' : '95vw'"
     max-width="800"
+    :attach="container"
     @click:outside="closeLoadStateDialog"
   >
     <v-card>
