@@ -77,7 +77,7 @@ CORE_POINTER_ZONES = {
     # NINTENDO 3DS - Top 400x240 (wide), bottom 320x240 (touch, narrower)
     # In vertical layout: bottom screen centered below top screen
     # =========================================================================
-    "citra": {
+    "azahar": {
         "native": (400, 480),
         "touch_native": (320, 240),
         "white_zone_top": 0.5,
@@ -125,15 +125,6 @@ CORE_POINTER_ZONES = {
     # =========================================================================
     # NINTENDO SWITCH - 1280x720 touchscreen (handheld mode)
     # =========================================================================
-    "yuzu": {
-        "native": (1280, 720),
-        "touch_native": (1280, 720),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "handheld_touch",
-    },
     "ryujinx": {
         "native": (1280, 720),
         "touch_native": (1280, 720),
@@ -554,19 +545,37 @@ CORE_POINTER_ZONES = {
         "white_zone_right": 0.0,
         "type": "light_gun",
     },
-}
-
-# Native aspect ratios for cores (width, height)
-CORE_ASPECT_RATIOS = {
-    "desmume": (256, 384),  # DS: two 256x192 screens stacked
-    "melonds": (256, 384),
-    "mgba": (240, 160),     # GBA
-    "gambatte": (160, 144),  # GB/GBC
-    "snes9x": (256, 224),   # SNES
-    "fceumm": (256, 240),   # NES
-    "genesis_plus_gx": (320, 224),  # Genesis/Mega Drive
-    "nestopia": (256, 240),  # NES
-    "mesen": (256, 240),    # NES
+    # =========================================================================
+    # STANDARD CONSOLES - No pointer/touch, just native aspect ratio
+    # =========================================================================
+    # GBA
+    "mgba": {
+        "native": (240, 160)
+    },
+    # GB/GBC
+    "gambatte": {
+        "native": (160, 144)
+    },
+    # SNES
+    "snes9x": {
+        "native": (256, 224)
+    },
+    # NES
+    "fceumm": {
+        "native": (256, 240)
+    },
+    # Genesis/Mega Drive
+    "genesis_plus_gx": {
+        "native": (320, 224)
+    },
+    # NES
+    "nestopia": {
+        "native": (256, 240)
+    },
+    # NES
+    "mesen": {
+        "native": (256, 240)
+    },
 }
 
 # Mapping from RomM locale codes to RetroArch numeric language codes
@@ -826,7 +835,8 @@ class RetroArchInstance:
                     )
 
             # Calculate height based on core aspect ratio
-            native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
+            zone = CORE_POINTER_ZONES.get(self.core, {})
+            native = zone.get("native", (4, 3))
             portrait_height = native[1] * self.width // native[0]
 
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
@@ -1354,12 +1364,9 @@ class RetroArchInstance:
         Returns:
             Tuple of (width, height, x_offset, y_offset) for the game area.
         """
-        # Get native aspect ratio - check CORE_POINTER_ZONES first, then CORE_ASPECT_RATIOS
-        zone = CORE_POINTER_ZONES.get(self.core)
-        if zone and "native" in zone:
-            native = zone["native"]
-        else:
-            native = CORE_ASPECT_RATIOS.get(self.core, (4, 3))
+        # Get native aspect ratio from CORE_POINTER_ZONES
+        zone = CORE_POINTER_ZONES.get(self.core, {})
+        native = zone.get("native", (4, 3))
 
         native_ratio = native[0] / native[1]
         is_portrait = self.height > self.width
