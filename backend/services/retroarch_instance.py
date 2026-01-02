@@ -674,7 +674,6 @@ class RetroArchInstance:
         width: int = 1280,
         height: int = 720,
         language: Optional[str] = None,
-        needs_rotation: bool = False,
     ):
         """Initialize a RetroArch instance.
 
@@ -698,11 +697,6 @@ class RetroArchInstance:
         self.width = width
         self.height = height
         self.language = language
-        self.needs_rotation = needs_rotation
-        self.is_portrait = (
-            self.height > self.width
-            and not needs_rotation
-        )
 
         self.retroarch_process: Optional[subprocess.Popen] = None
         self.gstreamer: Optional[GStreamerWebRTC] = None
@@ -841,11 +835,6 @@ class RetroArchInstance:
                         f"{option_name}={lang_value}"
                     )
 
-            # Calculate height based on core aspect ratio
-            zone = CORE_POINTER_ZONES.get(self.core, {})
-            native = zone.get("native", (4, 3))
-            portrait_height = native[1] * self.width // native[0]
-
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
                 f.write('#include "/etc/retroarch.cfg"\n')
@@ -882,16 +871,6 @@ class RetroArchInstance:
                 f.write('video_smooth = "false"\n')
                 f.write('video_max_swapchain_images = "2"\n')
                 f.write('video_font_enable = "true"\n')
-
-                # Portrait mode: align game to top instead of center
-                if self.is_portrait:
-                    # Enable custom viewport and set position to top
-                    f.write('video_viewport_custom = "true"\n')
-                    f.write('custom_viewport_x = "0"\n')
-                    f.write('custom_viewport_y = "0"\n')
-                    f.write(f'custom_viewport_width = "{self.width}"\n')
-                    f.write(f'custom_viewport_height = "{portrait_height}"\n')
-                    f.write('aspect_ratio_index = "22"\n')
 
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
@@ -948,12 +927,8 @@ class RetroArchInstance:
                 config_path,
                 "-L",
                 f"/usr/lib/libretro/{self.core}_libretro.so",
+                "--fullscreen",
             ]
-            # Portrait mode: use --size to set window dimensions at top
-            if self.is_portrait:
-                cmd.append(f"--size={self.width}x{portrait_height}")
-            else:
-                cmd.append("--fullscreen")
             cmd.append(self.rom_path)
 
             self.retroarch_process = subprocess.Popen(
@@ -1357,45 +1332,15 @@ class RetroArchInstance:
     def _calculate_game_crop(self) -> tuple[int, int, int, int]:
         """Calculate crop region to remove black bars around the game.
 
-        In landscape mode: RetroArch scales the game to fit the screen while
-        maintaining aspect ratio, centering it with black bars.
-
-        In portrait mode: Game fills width and is aligned to top, height is
-        calculated from aspect ratio.
+        Now that Xvfb dimensions are calculated based on core aspect ratio,
+        the game fills the entire screen without black bars.
 
         Returns:
             Tuple of (width, height, x_offset, y_offset) for the game area.
         """
-        # Get native aspect ratio from CORE_POINTER_ZONES
-        zone = CORE_POINTER_ZONES.get(self.core, {})
-        native = zone.get("native", (4, 3))
-
-        native_ratio = native[0] / native[1]
-
-        if self.is_portrait:
-            # Portrait mode: game fills width, aligned to top
-            game_width = self.width
-            game_height = native[1] * self.width // native[0]
-            x_offset = 0
-            y_offset = 0
-        else:
-            # Landscape mode: game centered with letterboxing
-            screen_ratio = self.width / self.height
-
-            if native_ratio > screen_ratio:
-                # Game is wider than screen - black bars on top/bottom
-                game_width = self.width
-                game_height = int(self.width / native_ratio)
-            else:
-                # Game is taller than screen - black bars on sides
-                game_height = self.height
-                game_width = int(self.height * native_ratio)
-
-            # Center position
-            x_offset = (self.width - game_width) // 2
-            y_offset = (self.height - game_height) // 2
-
-        return game_width, game_height, x_offset, y_offset
+        # Xvfb is now sized exactly to match the game aspect ratio
+        # So the game fills the entire screen without black bars
+        return self.width, self.height, 0, 0
 
     def _get_latest_state_file(self) -> Optional[Path]:
         """Find the recently modified state in the session states directory.
@@ -1739,6 +1684,9 @@ class RetroArchInstance:
         multi-screen consoles (DS, 3DS), motion controllers (Wii),
         light guns, and mouse-based systems.
 
+        Now that Xvfb dimensions match the game exactly, the white_zone
+        values directly define the touch region without additional scaling.
+
         Returns:
             Tuple of (x_offset, y_offset, width_ratio, height_ratio)
             representing the normalized region where pointer input maps,
@@ -1763,37 +1711,6 @@ class RetroArchInstance:
         y_offset = wz_top
         width_ratio = 1.0 - wz_left - wz_right
         height_ratio = 1.0 - wz_top - wz_bottom
-        zone_type = zone.get("type", "")
-
-        if self.is_portrait and zone_type == "dual_screen":
-            # In portrait mode, the game video fills the screen width
-            # and is aligned to top. The touch area is the bottom portion.
-            native = zone.get("native", (256, 384))
-            touch_native = zone.get("touch_native", (256, 192))
-
-            # Calculate the video height based on aspect ratio
-            video_height = native[1] * self.width // native[0]
-
-            # Touch screen starts after top screen
-            # For DS: top screen is 192px, touch is 192px (50% each)
-            touch_start_ratio = (native[1] - touch_native[1]) / native[1]
-
-            # The touch area in xvfb coordinates:
-            # y starts at touch_start_ratio of the video height
-            # But we need to express this as a fraction of the FULL xvfb height
-            video_y_ratio = video_height / self.height
-            touch_y_start = touch_start_ratio * video_y_ratio
-
-            # Width may be narrower for 3DS (bottom screen is 320 vs 400)
-            touch_width_ratio = touch_native[0] / native[0]
-            x_offset = (1.0 - touch_width_ratio) / 2.0  # Center horizontally
-
-            return (
-                x_offset,
-                touch_y_start,
-                touch_width_ratio,
-                (1.0 - touch_start_ratio) * video_y_ratio,
-            )
 
         return (x_offset, y_offset, width_ratio, height_ratio)
 

@@ -419,6 +419,14 @@ class RetroArchDaemon:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
+            # Apply max screen dimension limits from environment variables
+            max_width = os.getenv("MAX_SCREEN_WIDTH")
+            max_height = os.getenv("MAX_SCREEN_HEIGHT")
+            if max_width:
+                screen_width = min(screen_width, int(max_width))
+            if max_height:
+                screen_height = min(screen_height, int(max_height))
+
             xvfb_width, xvfb_height = calculate_optimal_resolution(
                 screen_width,
                 screen_height,
@@ -436,10 +444,24 @@ class RetroArchDaemon:
             if needs_rotation:
                 # Swap dimensions to create horizontal xvfb
                 xvfb_width, xvfb_height = xvfb_height, xvfb_width
-                logger.info(
-                    f"Horizontal core in portrait mode: using rotated xvfb "
-                    f"{xvfb_width}x{xvfb_height}"
-                )
+
+            # Calculate dimensions based on core aspect ratio
+            # This ensures xvfb matches the game area exactly (no black bars)
+            # Frontend will center the video via CSS
+            #
+            # The limiting dimension depends on screen orientation:
+            # - Landscape screen: height is smaller, so calculate width from height
+            # - Portrait screen: width is smaller, so calculate height from width
+            is_landscape_screen = xvfb_width > xvfb_height
+            if is_landscape_screen:
+                xvfb_width = native[0] * xvfb_height // native[1]
+            else:
+                xvfb_height = native[1] * xvfb_width // native[0]
+            logger.info(
+                f"Adjusted xvfb to {xvfb_width}x{xvfb_height} "
+                f"for core ratio {native[0]}:{native[1]}"
+                + (" (rotated)" if needs_rotation else "")
+            )
 
             display_num = await self.xvfb_manager.allocate_display(
                 xvfb_width, xvfb_height
@@ -460,7 +482,6 @@ class RetroArchDaemon:
                 width=xvfb_width,
                 height=xvfb_height,
                 language=session.language,
-                needs_rotation=needs_rotation,
             )
 
             # Create session directories BEFORE restoring saves/states

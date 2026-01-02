@@ -765,6 +765,7 @@ function handleSettingsChanged(newSettings: any) {
     </div>
 
     <div
+      class="video-wrapper"
       :class="{
         hidden: isLoading || error,
         rotated: effectiveRotation && gameControls.isFullscreen.value
@@ -861,6 +862,21 @@ function handleSettingsChanged(newSettings: any) {
   .game-video {
     height: 100vh;
     max-width: 100vw;
+  }
+}
+
+.video-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* Portrait mode: align video to top */
+@media (orientation: portrait) {
+  .video-wrapper {
+    align-items: flex-start;
   }
 }
 

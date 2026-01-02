@@ -12,6 +12,8 @@ services:
       - DB_HOST=${DB_HOST:-romm-db-dev}
       - ROMM_BASE_PATH=/app/romm
       - RETROARCH_ENABLED=true
+      - MAX_SCREEN_WIDTH=1920
+      - MAX_SCREEN_HEIGHT=1080
     ports:
       - "3000:3000" # Vite dev server (custom)
       - "5173:5173" # Vite dev server (default)
