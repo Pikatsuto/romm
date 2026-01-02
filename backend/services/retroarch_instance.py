@@ -613,7 +613,7 @@ CORE_LANGUAGE_OPTIONS = {
     },
     # Game Boy Advance
     "mgba": {
-        "option_name": "mgba_gb_model",  # mGBA uses GB model, not direct language
+        "option_name": "mgba_gb_model",  # mGBA uses GB model
         "values": {},  # No direct language option
         "default": None,
     },
@@ -875,7 +875,7 @@ class RetroArchInstance:
                     f.write('custom_viewport_y = "0"\n')
                     f.write(f'custom_viewport_width = "{self.width}"\n')
                     f.write(f'custom_viewport_height = "{portrait_height}"\n')
-                    f.write('aspect_ratio_index = "22"\n')  # 22 = Custom in RetroArch
+                    f.write('aspect_ratio_index = "22"\n')
 
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
@@ -894,14 +894,11 @@ class RetroArchInstance:
                 # User interface language (synced from RomM user settings)
                 if self.language:
                     ra_lang = ROMM_TO_RETROARCH_LANGUAGE.get(self.language, 0)
-                    logger.info(f"[RetroArch Language Debug] Instance writing config: language={self.language}, ra_lang={ra_lang}")
                     f.write(f'user_language = "{ra_lang}"\n')
-                else:
-                    logger.info(f"[RetroArch Language Debug] Instance: no language set (self.language={self.language})")
 
                 # Configure pointer/touch input for cores that support it
                 # This sets the input device to RETRO_DEVICE_POINTER (6) for
-                # absolute screen coordinates instead of relative mouse movement
+                # absolute screen coordinates
                 pointer_zone = CORE_POINTER_ZONES.get(self.core)
                 if pointer_zone:
                     pointer_port = pointer_zone.get("pointer_port")
@@ -910,7 +907,9 @@ class RetroArchInstance:
                         # Set the device type for the specified port
                         # port 0 = p1, port 1 = p2, etc.
                         port_num = pointer_port + 1  # RetroArch uses 1-indexed
-                        f.write(f'input_libretro_device_p{port_num} = "{pointer_device}"\n')
+                        var = f"input_libretro_device_p{port_num}"
+                        value = f'"{pointer_device}"'
+                        f.write(f'{var} = {value}\n')
                         logger.info(
                             f"[RetroArch Touch] Set port {port_num} to device "
                             f"{pointer_device} for core {self.core}"
@@ -923,9 +922,6 @@ class RetroArchInstance:
                 for opt_name, opt_value in core_touch_opts.items():
                     self._write_core_language_option(
                         core_options_path, opt_name, opt_value
-                    )
-                    logger.info(
-                        f"[RetroArch Touch] Set core option: {opt_name}={opt_value}"
                     )
 
             # Start RetroArch
