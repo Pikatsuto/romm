@@ -11,6 +11,9 @@ from config import (
     ENABLE_SCHEDULED_UPDATE_SWITCH_TITLEDB,
     OIDC_ENABLED,
     OIDC_PROVIDER,
+    RETROARCH_ENABLED,
+    RETROARCH_ENABLE_HEAVY_CORES,
+    RETROARCH_ENABLE_MEDIUM_CORES,
     SCHEDULED_CONVERT_IMAGES_TO_WEBP_CRON,
     SCHEDULED_RESCAN_CRON,
     SCHEDULED_UPDATE_LAUNCHBOX_METADATA_CRON,
@@ -18,6 +21,7 @@ from config import (
     UPLOAD_TIMEOUT,
     YOUTUBE_BASE_URL,
 )
+from services.retroarch_instance import load_cores_config
 from endpoints.responses.heartbeat import HeartbeatResponse
 from handler.database import db_user_handler
 from handler.filesystem import fs_platform_handler
@@ -99,6 +103,14 @@ async def heartbeat() -> HeartbeatResponse:
         "EMULATION": {
             "DISABLE_EMULATOR_JS": DISABLE_EMULATOR_JS,
             "DISABLE_RUFFLE_RS": DISABLE_RUFFLE_RS,
+            "RETROARCH_ENABLED": RETROARCH_ENABLED,
+            "RETROARCH_ENABLE_MEDIUM_CORES": RETROARCH_ENABLE_MEDIUM_CORES,
+            "RETROARCH_ENABLE_HEAVY_CORES": RETROARCH_ENABLE_HEAVY_CORES,
+            "RETROARCH_PLATFORMS": load_cores_config().get("platforms", {}),
+            "RETROARCH_CORES": {
+                name: {"tier": config.get("tier", "light")}
+                for name, config in load_cores_config().get("cores", {}).items()
+            },
         },
         "FRONTEND": {
             "UPLOAD_TIMEOUT": UPLOAD_TIMEOUT,

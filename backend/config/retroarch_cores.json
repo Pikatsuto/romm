@@ -1,0 +1,739 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "RetroArch cores configuration - combines pointer zones, tiers, and platform mappings",
+  "cores": {
+    "desmume": {
+      "tier": "light",
+      "native": [256, 384],
+      "touch_native": [256, 192],
+      "white_zone": { "top": 0.5, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "dual_screen",
+      "pointer_port": 1,
+      "pointer_device": 6,
+      "core_options": {
+        "desmume_pointer_type": "touch",
+        "desmume_pointer_device_l": "emulated",
+        "desmume_pointer_device_r": "emulated",
+        "desmume_pointer_colour": "white"
+      },
+      "language_option": {
+        "name": "desmume_firmware_language",
+        "values": { "en_US": "English", "en_GB": "English", "ja_JP": "Japanese", "fr_FR": "French", "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian" },
+        "default": "English"
+      }
+    },
+    "melonds": {
+      "tier": "light",
+      "native": [256, 384],
+      "touch_native": [256, 192],
+      "white_zone": { "top": 0.5, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "dual_screen",
+      "pointer_port": 1,
+      "pointer_device": 6,
+      "core_options": {
+        "melonds_touch_mode": "Touch"
+      },
+      "language_option": {
+        "name": "melonds_language",
+        "values": { "en_US": "English", "en_GB": "English", "ja_JP": "Japanese", "fr_FR": "French", "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian" },
+        "default": "English"
+      }
+    },
+    "citra": {
+      "tier": "heavy",
+      "native": [400, 480],
+      "touch_native": [320, 240],
+      "white_zone": { "top": 0.5, "bottom": 0.0, "left": 0.1, "right": 0.1 },
+      "type": "dual_screen"
+    },
+    "dolphin": {
+      "tier": "heavy",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "fceumm": {
+      "tier": "light",
+      "native": [256, 240],
+      "touch_native": [256, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "nestopia": {
+      "tier": "light",
+      "native": [256, 240],
+      "touch_native": [256, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "mesen": {
+      "tier": "light",
+      "native": [256, 240],
+      "touch_native": [256, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "snes9x": {
+      "tier": "light",
+      "native": [256, 224],
+      "touch_native": [256, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun",
+      "language_option": {
+        "name": "snes9x_region",
+        "values": { "en_US": "NTSC", "en_GB": "PAL", "ja_JP": "NTSC", "fr_FR": "PAL", "es_ES": "PAL", "de_DE": "PAL", "it_IT": "PAL" },
+        "default": "auto"
+      }
+    },
+    "bsnes": {
+      "tier": "light",
+      "native": [256, 224],
+      "touch_native": [256, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "mupen64plus_next": {
+      "tier": "medium",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "parallel_n64": {
+      "tier": "medium",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "gambatte": {
+      "tier": "light",
+      "native": [160, 144],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "sameboy": {
+      "tier": "light",
+      "native": [160, 144],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "mgba": {
+      "tier": "light",
+      "native": [240, 160],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "vba_next": {
+      "tier": "light",
+      "native": [240, 160],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "pokemini": {
+      "tier": "light",
+      "native": [96, 64],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "mednafen_vb": {
+      "tier": "light",
+      "native": [384, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "genesis_plus_gx": {
+      "tier": "light",
+      "native": [320, 224],
+      "touch_native": [320, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun",
+      "language_option": {
+        "name": "genesis_plus_gx_region_detect",
+        "values": { "en_US": "ntsc-u", "en_GB": "pal", "ja_JP": "ntsc-j", "fr_FR": "pal", "es_ES": "pal", "de_DE": "pal", "it_IT": "pal" },
+        "default": "auto"
+      }
+    },
+    "picodrive": {
+      "tier": "light",
+      "native": [320, 224],
+      "touch_native": [320, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "mednafen_saturn": {
+      "tier": "medium",
+      "native": [704, 480],
+      "touch_native": [704, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "yabause": {
+      "tier": "medium",
+      "native": [704, 480],
+      "touch_native": [704, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "kronos": {
+      "tier": "medium",
+      "native": [704, 480],
+      "touch_native": [704, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "flycast": {
+      "tier": "heavy",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "pcsx_rearmed": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "mednafen_psx_hw": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "swanstation": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "pcsx2": {
+      "tier": "heavy",
+      "native": [640, 448],
+      "touch_native": [640, 448],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "ppsspp": {
+      "tier": "heavy",
+      "native": [480, 272],
+      "touch_native": [480, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "stella": {
+      "tier": "light",
+      "native": [160, 192],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "a5200": {
+      "tier": "light",
+      "native": [320, 192],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "prosystem": {
+      "tier": "light",
+      "native": [320, 240],
+      "touch_native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "atari800": {
+      "tier": "medium",
+      "native": [336, 240],
+      "touch_native": [336, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "hatari": {
+      "tier": "medium",
+      "native": [640, 400],
+      "touch_native": [640, 400],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "handy": {
+      "tier": "light",
+      "native": [160, 102],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "mednafen_lynx": {
+      "tier": "light",
+      "native": [160, 102],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "virtualjaguar": {
+      "tier": "medium",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "mednafen_pce": {
+      "tier": "light",
+      "native": [512, 242],
+      "touch_native": [512, 242],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "mednafen_pce_fast": {
+      "tier": "light",
+      "native": [512, 242],
+      "touch_native": [512, 242],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "mednafen_supergrafx": {
+      "tier": "light",
+      "native": [512, 242],
+      "touch_native": [512, 242],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "mednafen_pcfx": {
+      "tier": "medium",
+      "native": [256, 240],
+      "touch_native": [256, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "quasi88": {
+      "tier": "medium",
+      "native": [640, 400],
+      "touch_native": [640, 400],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "np2kai": {
+      "tier": "medium",
+      "native": [640, 400],
+      "touch_native": [640, 400],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "mame": {
+      "tier": "heavy",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "arcade"
+    },
+    "mame2003_plus": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "arcade"
+    },
+    "fbneo": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "arcade"
+    },
+    "neocd": {
+      "tier": "light",
+      "native": [320, 224],
+      "touch_native": [320, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "arcade"
+    },
+    "mednafen_ngp": {
+      "tier": "light",
+      "native": [160, 152],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "opera": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "light_gun"
+    },
+    "gearcoleco": {
+      "tier": "light",
+      "native": [256, 192],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "freeintv": {
+      "tier": "light",
+      "native": [352, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "o2em": {
+      "tier": "light",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "vecx": {
+      "tier": "light",
+      "native": [330, 410],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "freechaf": {
+      "tier": "light",
+      "native": [128, 64],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "same_cdi": {
+      "tier": "heavy",
+      "native": [384, 280],
+      "touch_native": [384, 280],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "bluemsx": {
+      "tier": "light",
+      "native": [272, 240],
+      "touch_native": [272, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "vice_x64": {
+      "tier": "medium",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "vice_xvic": {
+      "tier": "medium",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "vice_x128": {
+      "tier": "medium",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "vice_xplus4": {
+      "tier": "medium",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "vice_xpet": {
+      "tier": "medium",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "puae": {
+      "tier": "medium",
+      "native": [720, 576],
+      "touch_native": [720, 576],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "cap32": {
+      "tier": "light",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "crocods": {
+      "tier": "light",
+      "native": [384, 272],
+      "touch_native": [384, 272],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "fuse": {
+      "tier": "light",
+      "native": [352, 296],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "81": {
+      "tier": "light",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "fmsx": {
+      "tier": "light",
+      "native": [272, 240],
+      "touch_native": [272, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "dosbox_pure": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "dosbox_svn": {
+      "tier": "medium",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "px68k": {
+      "tier": "medium",
+      "native": [768, 512],
+      "touch_native": [768, 512],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "x1": {
+      "tier": "medium",
+      "native": [640, 400],
+      "touch_native": [640, 400],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "scummvm": {
+      "tier": "heavy",
+      "native": [640, 480],
+      "touch_native": [640, 480],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    },
+    "mednafen_wswan": {
+      "tier": "light",
+      "native": [224, 144],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "gw": {
+      "tier": "light",
+      "native": [320, 240],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "sameduck": {
+      "tier": "light",
+      "native": [160, 144],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "potator": {
+      "tier": "light",
+      "native": [160, 160],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "vemulator": {
+      "tier": "light",
+      "native": [48, 32],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "uzem": {
+      "tier": "light",
+      "native": [360, 224],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "wasm4": {
+      "tier": "light",
+      "native": [160, 160],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": null
+    },
+    "theodore": {
+      "tier": "light",
+      "native": [320, 200],
+      "touch_native": [320, 200],
+      "white_zone": { "top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0 },
+      "type": "full_screen_pointer"
+    }
+  },
+  "platforms": {
+    "nes": ["fceumm", "nestopia", "mesen"],
+    "famicom": ["fceumm", "nestopia", "mesen"],
+    "fds": ["fceumm", "nestopia"],
+    "snes": ["snes9x", "bsnes"],
+    "sfam": ["snes9x", "bsnes"],
+    "n64": ["mupen64plus_next", "parallel_n64"],
+    "64dd": ["mupen64plus_next"],
+    "ngc": ["dolphin"],
+    "wii": ["dolphin"],
+    "gb": ["gambatte", "sameboy", "mgba"],
+    "gbc": ["gambatte", "sameboy", "mgba"],
+    "gba": ["mgba", "vba_next"],
+    "nds": ["desmume", "melonds"],
+    "3ds": ["citra"],
+    "pokemon-mini": ["pokemini"],
+    "virtualboy": ["mednafen_vb"],
+    "genesis": ["genesis_plus_gx", "picodrive"],
+    "sega-mega-drive-2-slash-genesis": ["genesis_plus_gx", "picodrive"],
+    "sega-mega-jet": ["genesis_plus_gx", "picodrive"],
+    "mega-pc": ["genesis_plus_gx", "picodrive"],
+    "tera-drive": ["genesis_plus_gx", "picodrive"],
+    "sega-nomad": ["genesis_plus_gx", "picodrive"],
+    "sega32": ["picodrive"],
+    "segacd": ["genesis_plus_gx"],
+    "segacd32": ["genesis_plus_gx", "picodrive"],
+    "saturn": ["mednafen_saturn", "yabause", "kronos"],
+    "dc": ["flycast"],
+    "sms": ["genesis_plus_gx", "picodrive"],
+    "sega-mark-iii": ["genesis_plus_gx"],
+    "sega-master-system-ii": ["genesis_plus_gx"],
+    "master-system-super-compact": ["genesis_plus_gx"],
+    "master-system-girl": ["genesis_plus_gx"],
+    "gamegear": ["genesis_plus_gx"],
+    "sg1000": ["genesis_plus_gx"],
+    "sc3000": ["bluemsx"],
+    "sega-pico": ["picodrive"],
+    "pico": ["picodrive"],
+    "psx": ["pcsx_rearmed", "mednafen_psx_hw", "swanstation"],
+    "ps2": ["pcsx2"],
+    "psp": ["ppsspp"],
+    "atari2600": ["stella"],
+    "atari5200": ["a5200"],
+    "atari7800": ["prosystem"],
+    "atari8bit": ["atari800"],
+    "atari800": ["atari800"],
+    "atari-st": ["hatari"],
+    "lynx": ["handy", "mednafen_lynx"],
+    "jaguar": ["virtualjaguar"],
+    "atari-jaguar-cd": ["virtualjaguar"],
+    "tg16": ["mednafen_pce", "mednafen_pce_fast"],
+    "turbografx-cd": ["mednafen_pce"],
+    "supergrafx": ["mednafen_supergrafx"],
+    "pc-fx": ["mednafen_pcfx"],
+    "pc-8800-series": ["quasi88"],
+    "pc-9800-series": ["np2kai"],
+    "arcade": ["fbneo", "mame", "mame2003_plus"],
+    "neo-geo-cd": ["fbneo", "neocd"],
+    "neogeoaes": ["fbneo"],
+    "neogeomvs": ["fbneo"],
+    "neo-geo-pocket": ["mednafen_ngp"],
+    "neo-geo-pocket-color": ["mednafen_ngp"],
+    "3do": ["opera"],
+    "colecovision": ["bluemsx", "gearcoleco"],
+    "intellivision": ["freeintv"],
+    "odyssey": ["o2em"],
+    "odyssey-2": ["o2em"],
+    "vectrex": ["vecx"],
+    "fairchild-channel-f": ["freechaf"],
+    "bally-astrocade": ["mame"],
+    "astrocade": ["mame"],
+    "philips-cd-i": ["same_cdi"],
+    "c64": ["vice_x64"],
+    "vic-20": ["vice_xvic"],
+    "c128": ["vice_x128"],
+    "c-plus-4": ["vice_xplus4"],
+    "c16": ["vice_xplus4"],
+    "amiga": ["puae"],
+    "amiga-cd32": ["puae"],
+    "amiga-cd": ["puae"],
+    "commodore-cdtv": ["puae"],
+    "acpc": ["cap32", "crocods"],
+    "amstrad-gx4000": ["cap32"],
+    "zxs": ["fuse"],
+    "zx81": ["81"],
+    "zx80": ["81"],
+    "zx-spectrum-next": ["fuse"],
+    "msx": ["bluemsx", "fmsx"],
+    "msx2": ["bluemsx"],
+    "msx2plus": ["bluemsx"],
+    "msx-turbo": ["bluemsx"],
+    "dos": ["dosbox_pure", "dosbox_svn"],
+    "sharp-x68000": ["px68k"],
+    "x1": ["x1"],
+    "apple-iigs": ["mame"],
+    "appleii": ["mame"],
+    "scummvm": ["scummvm"],
+    "wonderswan": ["mednafen_wswan"],
+    "wonderswan-color": ["mednafen_wswan"],
+    "swancrystal": ["mednafen_wswan"],
+    "g-and-w": ["gw"],
+    "mega-duck-slash-cougar-boy": ["sameduck"],
+    "supervision": ["potator"],
+    "hartung": ["potator"],
+    "palmtex": ["potator"],
+    "gamate": ["mame"],
+    "microvision": ["mame"],
+    "casio-loopy": ["mame"],
+    "casio-pv-1000": ["mame"],
+    "multivision": ["mame"],
+    "creativision": ["mame"],
+    "epoch-cassette-vision": ["mame"],
+    "epoch-super-cassette-vision": ["mame"],
+    "pocketstation": ["mame"],
+    "vmu": ["vemulator"],
+    "uzebox": ["uzem"],
+    "pokitto": ["mame"],
+    "wasm-4": ["wasm4"],
+    "philips-vg-5000": ["mame"],
+    "aquarius": ["mame"],
+    "jupiter-ace": ["mame"],
+    "sam-coupe": ["mame"],
+    "thomson-mo5": ["theodore"],
+    "thomson-to": ["theodore"],
+    "tomy-tutor": ["mame"],
+    "sord-m5": ["mame"],
+    "spectravideo": ["bluemsx"],
+    "super-acan": ["mame"],
+    "super-vision-8000": ["potator"],
+    "rca-studio-ii": ["mame"],
+    "interton-vc-4000": ["mame"],
+    "vc-4000": ["mame"],
+    "videopac-g7400": ["o2em"],
+    "atari-xegs": ["atari800"],
+    "trs-80": ["mame"],
+    "trs-80-color-computer": ["mame"],
+    "cpet": ["vice_xpet"],
+    "atom": ["mame"],
+    "acorn-archimedes": ["mame"],
+    "dragon-32-slash-64": ["mame"],
+    "camputers-lynx": ["mame"],
+    "enterprise": ["mame"],
+    "galaksija": ["mame"],
+    "colour-genie": ["mame"],
+    "smc-777": ["mame"],
+    "mtx512": ["mame"],
+    "memotech-mtx": ["mame"],
+    "sinclair-ql": ["mame"],
+    "tatung-einstein": ["mame"],
+    "exelvision": ["mame"],
+    "laser200": ["mame"],
+    "ti-994a": ["mame"],
+    "ti-99": ["mame"],
+    "colecoadam": ["mame"],
+    "hrx": ["mame"],
+    "exidy-sorcerer": ["mame"]
+  },
+  "retroarch_languages": {
+    "en_US": 0,
+    "en_GB": 0,
+    "ja_JP": 1,
+    "fr_FR": 2,
+    "es_ES": 3,
+    "de_DE": 4,
+    "it_IT": 5,
+    "pt_BR": 7,
+    "ru_RU": 9,
+    "ko_KR": 10,
+    "zh_TW": 11,
+    "zh_CN": 12,
+    "pl_PL": 14,
+    "cs_CZ": 27,
+    "hu_HU": 30,
+    "ro_RO": 32
+  }
+}

@@ -37,6 +37,11 @@ const defaultHeartbeat: Heartbeat = {
   EMULATION: {
     DISABLE_EMULATOR_JS: false,
     DISABLE_RUFFLE_RS: false,
+    RETROARCH_ENABLED: false,
+    RETROARCH_ENABLE_MEDIUM_CORES: true,
+    RETROARCH_ENABLE_HEAVY_CORES: false,
+    RETROARCH_PLATFORMS: {},
+    RETROARCH_CORES: {},
   },
   FRONTEND: {
     UPLOAD_TIMEOUT: 20,

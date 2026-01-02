@@ -14,6 +14,7 @@ import firmwareApi from "@/services/api/firmware";
 import romApi from "@/services/api/rom";
 import storeAuth from "@/stores/auth";
 import storeConfig from "@/stores/config";
+import storeHeartbeat from "@/stores/heartbeat";
 import storePlaying from "@/stores/playing";
 import { type DetailedRom } from "@/stores/roms";
 import type { Events } from "@/types/emitter";
@@ -34,6 +35,7 @@ const route = useRoute();
 const auth = storeAuth();
 const playingStore = storePlaying();
 const configStore = storeConfig();
+const heartbeatStore = storeHeartbeat();
 const { playing, fullScreen } = storeToRefs(playingStore);
 const rom = ref<DetailedRom | null>(null);
 const firmwareOptions = ref<FirmwareSchema[]>([]);
@@ -201,10 +203,7 @@ onMounted(async () => {
   firmwareOptions.value = firmwareResponse.data;
 
   supportedCores.value = [
-    ...getSupportedCores(
-      rom.value.platform_slug,
-      configStore.config.RETROARCH_ENABLED
-    ),
+    ...getSupportedCores(rom.value.platform_slug, heartbeatStore.value),
   ];
 
   // Listen for save/state selection from dialogs

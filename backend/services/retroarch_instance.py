@@ -6,638 +6,152 @@ input forwarding, save states, and core option configuration.
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 import subprocess
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from services.gstreamer_webrtc import GStreamerWebRTC
 
 logger = logging.getLogger(__name__)
 
 
-# Pointer/touchscreen zone configuration per core
-# For multi-screen consoles (DS, 3DS), defines where the touch area is located
-# For single-screen pointer devices (Wii, DOS, etc.), full screen is used
-# white_zone values are normalized (0.0-1.0) fractions of non-touch areas
-#
-# Categories:
-# - DUAL_SCREEN: DS, 3DS - touchscreen is on secondary display
-# - GAMEPAD_SCREEN: Wii U - GamePad has separate touchscreen
-# - FULL_SCREEN_POINTER: Wii, light guns, mouse-based systems
-# - HANDHELD_TOUCH: Vita, Switch - full screen touch
-#
-# RetroArch device types for pointer input:
-# - RETRO_DEVICE_POINTER = 6 (absolute screen coordinates, touch-like)
-# - RETRO_DEVICE_LIGHTGUN = 4 (absolute coordinates for light guns)
-# - RETRO_DEVICE_MOUSE = 2 (relative movement - NOT recommended for touch)
-#
-# pointer_port: Which input port to set to pointer mode (0=p1, 1=p2, etc.)
-# pointer_device: RetroArch device ID (6=pointer, 4=lightgun)
-# core_touch_options: Core-specific options to enable touch/pointer mode
-CORE_POINTER_ZONES = {
-    # =========================================================================
-    # NINTENDO DS - Two 256x192 screens stacked vertically, bottom is touch
-    # =========================================================================
-    "desmume": {
-        "native": (256, 384),
-        "touch_native": (256, 192),
-        "white_zone_top": 0.5,      # Top screen (non-touch)
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "dual_screen",
-        "pointer_port": 1,          # Touch input on port 2 (index 1)
-        "pointer_device": 6,        # RETRO_DEVICE_POINTER
-        "core_touch_options": {
-            "desmume_pointer_type": "touch",
-            "desmume_pointer_device_l": "emulated",
-            "desmume_pointer_device_r": "emulated",
-            "desmume_pointer_colour": "white",
-        },
-    },
-    "melonds": {
-        "native": (256, 384),
-        "touch_native": (256, 192),
-        "white_zone_top": 0.5,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "dual_screen",
-        "pointer_port": 1,          # Touch input on port 2 (index 1)
-        "pointer_device": 6,        # RETRO_DEVICE_POINTER
-        "core_touch_options": {
-            "melonds_touch_mode": "Touch",
-        },
-    },
-    # =========================================================================
-    # NINTENDO 3DS - Top 400x240 (wide), bottom 320x240 (touch, narrower)
-    # In vertical layout: bottom screen centered below top screen
-    # =========================================================================
-    "azahar": {
-        "native": (400, 480),
-        "touch_native": (320, 240),
-        "white_zone_top": 0.5,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.1,     # Bottom screen narrower, centered
-        "white_zone_right": 0.1,
-        "type": "dual_screen",
-    },
-    # =========================================================================
-    # NINTENDO WII U - GamePad 854x480 touchscreen
-    # =========================================================================
-    "cemu": {
-        "native": (854, 480),
-        "touch_native": (854, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "gamepad_screen",
-    },
-    # =========================================================================
-    # NINTENDO WII - Wiimote pointer, full screen
-    # =========================================================================
-    "dolphin": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # SONY PS VITA - 960x544 front touchscreen
-    # =========================================================================
-    "vita3k": {
-        "native": (960, 544),
-        "touch_native": (960, 544),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "handheld_touch",
-    },
-    # =========================================================================
-    # NINTENDO SWITCH - 1280x720 touchscreen (handheld mode)
-    # =========================================================================
-    "ryujinx": {
-        "native": (1280, 720),
-        "touch_native": (1280, 720),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "handheld_touch",
-    },
-    # =========================================================================
-    # DOS/PC - Mouse-based games, full screen pointer
-    # =========================================================================
-    "dosbox_pure": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    "dosbox_svn": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # AMIGA - Mouse-based computer, full screen pointer
-    # =========================================================================
-    "puae": {
-        "native": (720, 576),
-        "touch_native": (720, 576),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    "uae4arm": {
-        "native": (720, 576),
-        "touch_native": (720, 576),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # ATARI ST - Mouse-based computer
-    # =========================================================================
-    "hatari": {
-        "native": (640, 400),
-        "touch_native": (640, 400),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # SCUMMVM - Point and click adventure games
-    # =========================================================================
-    "scummvm": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # LIGHT GUN GAMES - NES Zapper, SNES Super Scope, etc.
-    # =========================================================================
-    "fceumm": {
-        "native": (256, 240),
-        "touch_native": (256, 240),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "nestopia": {
-        "native": (256, 240),
-        "touch_native": (256, 240),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "mesen": {
-        "native": (256, 240),
-        "touch_native": (256, 240),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "snes9x": {
-        "native": (256, 224),
-        "touch_native": (256, 224),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",  # Super Scope, mouse (Mario Paint)
-    },
-    "bsnes": {
-        "native": (256, 224),
-        "touch_native": (256, 224),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # SEGA - Light gun (Menacer, Justifier), mouse
-    # =========================================================================
-    "genesis_plus_gx": {
-        "native": (320, 224),
-        "touch_native": (320, 224),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "picodrive": {
-        "native": (320, 224),
-        "touch_native": (320, 224),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # SEGA SATURN - Light gun (Virtua Gun), mouse
-    # =========================================================================
-    "yabause": {
-        "native": (704, 480),
-        "touch_native": (704, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "kronos": {
-        "native": (704, 480),
-        "touch_native": (704, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "beetle_saturn": {
-        "native": (704, 480),
-        "touch_native": (704, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # PLAYSTATION - GunCon, Namco G-Con, mouse
-    # =========================================================================
-    "pcsx_rearmed": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "beetle_psx": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "beetle_psx_hw": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "duckstation": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "swanstation": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # PLAYSTATION 2 - GunCon 2
-    # =========================================================================
-    "pcsx2": {
-        "native": (640, 448),
-        "touch_native": (640, 448),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # 3DO - Light gun games
-    # =========================================================================
-    "opera": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "4do": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # ARCADE - MAME/FBNeo with trackball, spinner, light gun, touchscreen
-    # =========================================================================
-    "mame": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "mame2003": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "mame2003_plus": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "mame2010": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "mame2016": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "fbneo": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    "fbalpha": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "arcade",
-    },
-    # =========================================================================
-    # PC ENGINE / TURBOGRAFX - Mouse games
-    # =========================================================================
-    "beetle_pce": {
-        "native": (512, 242),
-        "touch_native": (512, 242),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    "beetle_pce_fast": {
-        "native": (512, 242),
-        "touch_native": (512, 242),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # COMMODORE 64 - Mouse, light pen
-    # =========================================================================
-    "vice_x64": {
-        "native": (384, 272),
-        "touch_native": (384, 272),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # MSX - Mouse games
-    # =========================================================================
-    "bluemsx": {
-        "native": (272, 240),
-        "touch_native": (272, 240),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    "fmsx": {
-        "native": (272, 240),
-        "touch_native": (272, 240),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # PALM OS - Full touchscreen PDA
-    # =========================================================================
-    "mu": {
-        "native": (160, 220),
-        "touch_native": (160, 220),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "handheld_touch",
-    },
-    # =========================================================================
-    # SHARP X68000 - Mouse-based computer
-    # =========================================================================
-    "px68k": {
-        "native": (768, 512),
-        "touch_native": (768, 512),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "full_screen_pointer",
-    },
-    # =========================================================================
-    # SEGA DREAMCAST - Light gun (Seaman microphone, but also DC Gun games)
-    # =========================================================================
-    "flycast": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    "reicast": {
-        "native": (640, 480),
-        "touch_native": (640, 480),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "light_gun",
-    },
-    # =========================================================================
-    # STANDARD CONSOLES - No pointer/touch, just native aspect ratio
-    # =========================================================================
-    # GBA
-    "mgba": {
-        "native": (240, 160),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "None",
-    },
-    # GB/GBC
-    "gambatte": {
-        "native": (160, 144),
-        "white_zone_top": 0.0,
-        "white_zone_bottom": 0.0,
-        "white_zone_left": 0.0,
-        "white_zone_right": 0.0,
-        "type": "None",
-    },
-}
+# Path to the cores configuration JSON file
+CORES_CONFIG_PATH = Path(__file__).parent.parent / "config" / "retroarch_cores.json"
 
-# Mapping from RomM locale codes to RetroArch numeric language codes
-# Based on RetroArch's intl/msg_hash_us.h enum retro_language
-ROMM_TO_RETROARCH_LANGUAGE = {
-    "en_US": 0,   # RETRO_LANGUAGE_ENGLISH
-    "en_GB": 0,   # RETRO_LANGUAGE_ENGLISH (fallback)
-    "ja_JP": 1,   # RETRO_LANGUAGE_JAPANESE
-    "fr_FR": 2,   # RETRO_LANGUAGE_FRENCH
-    "es_ES": 3,   # RETRO_LANGUAGE_SPANISH
-    "de_DE": 4,   # RETRO_LANGUAGE_GERMAN
-    "it_IT": 5,   # RETRO_LANGUAGE_ITALIAN
-    "pt_BR": 7,   # RETRO_LANGUAGE_PORTUGUESE_BRAZIL
-    "ru_RU": 9,   # RETRO_LANGUAGE_RUSSIAN
-    "ko_KR": 10,  # RETRO_LANGUAGE_KOREAN
-    "zh_TW": 11,  # RETRO_LANGUAGE_CHINESE_TRADITIONAL
-    "zh_CN": 12,  # RETRO_LANGUAGE_CHINESE_SIMPLIFIED
-    "pl_PL": 14,  # RETRO_LANGUAGE_POLISH
-    "cs_CZ": 27,  # RETRO_LANGUAGE_CZECH
-    "hu_HU": 30,  # RETRO_LANGUAGE_HUNGARIAN
-    "ro_RO": 32,  # RETRO_LANGUAGE_ROMANIAN
-}
 
-# Mapping from RomM locale codes to core-specific language option values
-# Each core has its own language option name and accepted values
-CORE_LANGUAGE_OPTIONS = {
-    # Nintendo DS cores
-    "desmume": {
-        "option_name": "desmume_firmware_language",
-        "values": {
-            "en_US": "English", "en_GB": "English",
-            "ja_JP": "Japanese", "fr_FR": "French",
-            "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian",
-        },
-        "default": "English",
-    },
-    "melonds": {
-        "option_name": "melonds_language",
-        "values": {
-            "en_US": "English", "en_GB": "English",
-            "ja_JP": "Japanese", "fr_FR": "French",
-            "es_ES": "Spanish", "de_DE": "German", "it_IT": "Italian",
-        },
-        "default": "English",
-    },
-    # Game Boy Advance
-    "mgba": {
-        "option_name": "mgba_gb_model",  # mGBA uses GB model
-        "values": {},  # No direct language option
-        "default": None,
-    },
-    # SNES
-    "snes9x": {
-        "option_name": "snes9x_region",
-        "values": {
-            "en_US": "NTSC", "en_GB": "PAL",
-            "ja_JP": "NTSC", "fr_FR": "PAL",
-            "es_ES": "PAL", "de_DE": "PAL", "it_IT": "PAL",
-        },
-        "default": "auto",
-    },
-    # Genesis/Mega Drive
-    "genesis_plus_gx": {
-        "option_name": "genesis_plus_gx_region_detect",
-        "values": {
-            "en_US": "ntsc-u", "en_GB": "pal",
-            "ja_JP": "ntsc-j", "fr_FR": "pal",
-            "es_ES": "pal", "de_DE": "pal", "it_IT": "pal",
-        },
-        "default": "auto",
-    },
-}
+@lru_cache(maxsize=1)
+def load_cores_config() -> dict[str, Any]:
+    """Load the RetroArch cores configuration from JSON file.
+
+    Returns:
+        dict: The full cores configuration including cores, platforms, and languages.
+    """
+    try:
+        with open(CORES_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load cores config from {CORES_CONFIG_PATH}: {e}")
+        return {"cores": {}, "platforms": {}, "retroarch_languages": {}}
+
+
+def get_core_config(core_name: str) -> Optional[dict[str, Any]]:
+    """Get configuration for a specific core.
+
+    Args:
+        core_name: Name of the libretro core (without _libretro.so suffix).
+
+    Returns:
+        dict: Core configuration or None if not found.
+    """
+    config = load_cores_config()
+    return config.get("cores", {}).get(core_name)
+
+
+def get_core_pointer_zone(core_name: str) -> Optional[dict[str, Any]]:
+    """Get pointer/touchscreen zone configuration for a core.
+
+    Converts the JSON format to the legacy CORE_POINTER_ZONES format
+    for backwards compatibility.
+
+    Args:
+        core_name: Name of the libretro core.
+
+    Returns:
+        dict: Pointer zone configuration in legacy format, or None if not found.
+    """
+    core_config = get_core_config(core_name)
+    if not core_config:
+        return None
+
+    # Convert JSON format to legacy format
+    zone = {
+        "native": tuple(core_config.get("native", [4, 3])),
+        "type": core_config.get("type"),
+    }
+
+    if "touch_native" in core_config:
+        zone["touch_native"] = tuple(core_config["touch_native"])
+
+    white_zone = core_config.get("white_zone", {})
+    zone["white_zone_top"] = white_zone.get("top", 0.0)
+    zone["white_zone_bottom"] = white_zone.get("bottom", 0.0)
+    zone["white_zone_left"] = white_zone.get("left", 0.0)
+    zone["white_zone_right"] = white_zone.get("right", 0.0)
+
+    if "pointer_port" in core_config:
+        zone["pointer_port"] = core_config["pointer_port"]
+    if "pointer_device" in core_config:
+        zone["pointer_device"] = core_config["pointer_device"]
+    if "core_options" in core_config:
+        zone["core_touch_options"] = core_config["core_options"]
+
+    return zone
+
+
+def get_core_language_option(core_name: str) -> Optional[dict[str, Any]]:
+    """Get language option configuration for a core.
+
+    Args:
+        core_name: Name of the libretro core.
+
+    Returns:
+        dict: Language option configuration with name, values, and default.
+    """
+    core_config = get_core_config(core_name)
+    if not core_config:
+        return None
+    return core_config.get("language_option")
+
+
+def get_retroarch_language_code(locale: str) -> int:
+    """Get RetroArch numeric language code for a locale.
+
+    Args:
+        locale: RomM locale code (e.g., "en_US", "fr_FR").
+
+    Returns:
+        int: RetroArch language code (0 = English by default).
+    """
+    config = load_cores_config()
+    return config.get("retroarch_languages", {}).get(locale, 0)
+
+
+def get_platforms_for_core(core_name: str) -> list[str]:
+    """Get list of platforms that support a specific core.
+
+    Args:
+        core_name: Name of the libretro core.
+
+    Returns:
+        list: Platform slugs that support this core.
+    """
+    config = load_cores_config()
+    platforms = []
+    for platform, cores in config.get("platforms", {}).items():
+        if core_name in cores:
+            platforms.append(platform)
+    return platforms
+
+
+def get_cores_for_platform(platform_slug: str) -> list[str]:
+    """Get list of cores that support a specific platform.
+
+    Args:
+        platform_slug: Platform slug identifier.
+
+    Returns:
+        list: Core names that support this platform.
+    """
+    config = load_cores_config()
+    return config.get("platforms", {}).get(platform_slug.lower(), [])
+
+
 
 
 class RetroArchInstance:
@@ -719,8 +233,11 @@ class RetroArchInstance:
             True if the core's native width > height (horizontal),
             False if height >= width (vertical, like DS/3DS).
         """
-        zone = CORE_POINTER_ZONES.get(self.core, {})
-        native = zone.get("native", (4, 3))
+        zone = get_core_pointer_zone(self.core.lower())
+        if zone:
+            native = zone.get("native", (4, 3))
+        else:
+            native = (4, 3)
         return native[0] > native[1]
 
     def _setup_session_directories(self):
@@ -820,13 +337,13 @@ class RetroArchInstance:
                 shutil.copy2(pre_generated, core_options_path)
 
             # Set core-specific language option based on user's RomM language
-            if self.language and self.core.lower() in CORE_LANGUAGE_OPTIONS:
-                core_lang_config = CORE_LANGUAGE_OPTIONS[self.core.lower()]
-                option_name = core_lang_config["option_name"]
-                lang_value = core_lang_config["values"].get(
-                    self.language, core_lang_config["default"]
-                )
-                if lang_value:
+            core_lang_config = get_core_language_option(self.core.lower())
+            if self.language and core_lang_config:
+                option_name = core_lang_config.get("name", "")
+                values = core_lang_config.get("values", {})
+                default = core_lang_config.get("default")
+                lang_value = values.get(self.language, default)
+                if option_name and lang_value:
                     self._write_core_language_option(
                         core_options_path, option_name, lang_value
                     )
@@ -888,13 +405,13 @@ class RetroArchInstance:
 
                 # User interface language (synced from RomM user settings)
                 if self.language:
-                    ra_lang = ROMM_TO_RETROARCH_LANGUAGE.get(self.language, 0)
+                    ra_lang = get_retroarch_language_code(self.language)
                     f.write(f'user_language = "{ra_lang}"\n')
 
                 # Configure pointer/touch input for cores that support it
                 # This sets the input device to RETRO_DEVICE_POINTER (6) for
                 # absolute screen coordinates
-                pointer_zone = CORE_POINTER_ZONES.get(self.core)
+                pointer_zone = get_core_pointer_zone(self.core.lower())
                 if pointer_zone:
                     pointer_port = pointer_zone.get("pointer_port")
                     pointer_device = pointer_zone.get("pointer_device")
@@ -911,7 +428,7 @@ class RetroArchInstance:
                         )
 
             # Write core-specific touch options to core options file
-            pointer_zone = CORE_POINTER_ZONES.get(self.core)
+            pointer_zone = get_core_pointer_zone(self.core.lower())
             if pointer_zone:
                 core_touch_opts = pointer_zone.get("core_touch_options", {})
                 for opt_name, opt_value in core_touch_opts.items():
@@ -1680,7 +1197,7 @@ class RetroArchInstance:
     ) -> Optional[tuple]:
         """Calculate pointer/touchscreen region based on core type.
 
-        Uses CORE_POINTER_ZONES to determine the touchable area for
+        Uses core configuration to determine the touchable area for
         multi-screen consoles (DS, 3DS), motion controllers (Wii),
         light guns, and mouse-based systems.
 
@@ -1692,7 +1209,7 @@ class RetroArchInstance:
             representing the normalized region where pointer input maps,
             or None if core doesn't need special pointer handling.
         """
-        zone = CORE_POINTER_ZONES.get(self.core)
+        zone = get_core_pointer_zone(self.core.lower())
         if not zone:
             return None
 

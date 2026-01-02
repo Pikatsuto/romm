@@ -85,9 +85,44 @@ RUN sed -i '22a #include <ctime>' ./src/Util.h \
 RUN rm -rf /tmp/RALibretro
 
 # Download RetroArch cores for development
+# Cores are downloaded from libretro buildbot nightly builds
 RUN mkdir -p /usr/lib/libretro && \
     cd /tmp && \
-    for core in melonds desmume mgba snes9x genesis_plus_gx fceumm gambatte nestopia mesen; do \
+    for core in \
+        # Nintendo consoles
+        fceumm nestopia mesen \
+        snes9x bsnes \
+        mupen64plus_next parallel_n64 \
+        dolphin \
+        # Nintendo handhelds
+        gambatte sameboy mgba vba_next \
+        desmume melonds \
+        citra pokemini \
+        mednafen_vb \
+        # Sega consoles
+        genesis_plus_gx picodrive \
+        mednafen_saturn yabause kronos \
+        flycast \
+        # Sony consoles
+        pcsx_rearmed mednafen_psx_hw swanstation \
+        pcsx2 ppsspp \
+        # Atari
+        stella a5200 prosystem atari800 hatari \
+        handy mednafen_lynx virtualjaguar \
+        # NEC
+        mednafen_pce mednafen_pce_fast mednafen_supergrafx mednafen_pcfx \
+        quasi88 np2kai \
+        # Arcade
+        fbneo mame mame2003_plus neocd mednafen_ngp \
+        # Other consoles
+        opera gearcoleco freeintv o2em vecx freechaf same_cdi bluemsx \
+        # Computers
+        vice_x64 vice_xvic vice_x128 vice_xplus4 vice_xpet \
+        puae cap32 crocods fuse 81 fmsx \
+        dosbox_pure dosbox_svn px68k x1 scummvm \
+        # Handhelds
+        mednafen_wswan gw sameduck potator vemulator uzem wasm4 theodore \
+    ; do \
         echo "Downloading ${core}_libretro.so..."; \
         curl -L -o "${core}_libretro.so.zip" "http://buildbot.libretro.com/nightly/linux/x86_64/latest/${core}_libretro.so.zip" 2>/dev/null && \
         unzip -o "${core}_libretro.so.zip" -d /usr/lib/libretro/ 2>/dev/null && \

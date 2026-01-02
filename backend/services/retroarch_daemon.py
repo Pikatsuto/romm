@@ -24,8 +24,8 @@ from handler.retroarch_handler import SessionState
 from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
 
-from services.xvfb_manager import XvfbManager, calculate_optimal_resolution
-from services.retroarch_instance import RetroArchInstance, CORE_POINTER_ZONES
+from services.xvfb_manager import XvfbManager
+from services.retroarch_instance import RetroArchInstance, get_core_pointer_zone
 from services.retroarch_sync import (
     restore_save_to_session,
     restore_state_to_session,
@@ -427,39 +427,40 @@ class RetroArchDaemon:
             if max_height:
                 screen_height = min(screen_height, int(max_height))
 
-            xvfb_width, xvfb_height = calculate_optimal_resolution(
-                screen_width,
-                screen_height,
-                os.getenv("RETROARCH_MAX_RESOLUTION")
-            )
+            # Get core native resolution for pixel-perfect rendering
+            # Using native resolution dramatically improves performance
+            # The browser will scale up with nearest-neighbor (pixelated)
+            zone = get_core_pointer_zone(session.core.lower()) or {}
+            native = zone.get("native", (320, 240))
+
+            # Calculate multiplier to reach a reasonable encoding resolution
+            # Too small = encoding artifacts, too large = performance issues
+            # Target: at least 480p height for good video encoding
+            min_encoding_height = int(os.getenv("RETROARCH_MIN_HEIGHT", "480"))
+            max_encoding_height = int(os.getenv("RETROARCH_MAX_HEIGHT", "720"))
+
+            # Calculate multiplier based on native height
+            native_w, native_h = native
+            min_multiplier = max(1, (min_encoding_height + native_h - 1) // native_h)
+            max_multiplier = max(1, max_encoding_height // native_h)
+            multiplier = min(min_multiplier, max_multiplier)
+
+            # Apply multiplier to get xvfb resolution
+            xvfb_width = native_w * multiplier
+            xvfb_height = native_h * multiplier
 
             # Check if we need to rotate for horizontal cores in portrait mode
-            # Portrait player + horizontal core = create horizontal + rotate
-            is_portrait_player = xvfb_height > xvfb_width
-            zone = CORE_POINTER_ZONES.get(session.core, {})
-            native = zone.get("native", (4, 3))
-            is_horizontal_core = native[0] > native[1]
+            is_portrait_player = screen_height > screen_width
+            is_horizontal_core = native_w > native_h
             needs_rotation = is_portrait_player and is_horizontal_core
 
             if needs_rotation:
                 # Swap dimensions to create horizontal xvfb
                 xvfb_width, xvfb_height = xvfb_height, xvfb_width
 
-            # Calculate dimensions based on core aspect ratio
-            # This ensures xvfb matches the game area exactly (no black bars)
-            # Frontend will center the video via CSS
-            #
-            # The limiting dimension depends on screen orientation:
-            # - Landscape screen: height is smaller, so calculate width from height
-            # - Portrait screen: width is smaller, so calculate height from width
-            is_landscape_screen = xvfb_width > xvfb_height
-            if is_landscape_screen:
-                xvfb_width = native[0] * xvfb_height // native[1]
-            else:
-                xvfb_height = native[1] * xvfb_width // native[0]
             logger.info(
-                f"Adjusted xvfb to {xvfb_width}x{xvfb_height} "
-                f"for core ratio {native[0]}:{native[1]}"
+                f"Using native resolution {native_w}x{native_h} x{multiplier} = "
+                f"{xvfb_width}x{xvfb_height}"
                 + (" (rotated)" if needs_rotation else "")
             )
 

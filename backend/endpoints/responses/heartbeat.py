@@ -25,9 +25,18 @@ class FilesystemDict(TypedDict):
     FS_PLATFORMS: list[str]
 
 
+class RetroArchCoreConfig(TypedDict):
+    tier: str
+
+
 class EmulationDict(TypedDict):
     DISABLE_EMULATOR_JS: bool
     DISABLE_RUFFLE_RS: bool
+    RETROARCH_ENABLED: bool
+    RETROARCH_ENABLE_MEDIUM_CORES: bool
+    RETROARCH_ENABLE_HEAVY_CORES: bool
+    RETROARCH_PLATFORMS: dict[str, list[str]]
+    RETROARCH_CORES: dict[str, RetroArchCoreConfig]
 
 
 class FrontendDict(TypedDict):

@@ -847,6 +847,9 @@ function handleSettingsChanged(newSettings: any) {
 
 .game-video {
   object-fit: contain;
+  /* Nearest-neighbor scaling for pixel-perfect retro game rendering */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 /* Portrait orientation: fill width, auto height with max constraint */

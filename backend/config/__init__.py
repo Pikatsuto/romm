@@ -223,6 +223,13 @@ RETROARCH_MAX_SESSIONS: Final[int] = safe_int(
 RETROARCH_CORES_PATH: Final[str] = _get_env(
     "RETROARCH_CORES_PATH", "/usr/lib/libretro"
 )
+# Core tiers: light (always), medium (N64/Saturn/PSX/Arcade), heavy (Dolphin/Citra/PCSX2/MAME)
+RETROARCH_ENABLE_MEDIUM_CORES: Final[bool] = safe_str_to_bool(
+    _get_env("RETROARCH_ENABLE_MEDIUM_CORES", "true")
+)
+RETROARCH_ENABLE_HEAVY_CORES: Final[bool] = safe_str_to_bool(
+    _get_env("RETROARCH_ENABLE_HEAVY_CORES", "false")
+)
 
 # FRONTEND
 UPLOAD_TIMEOUT: Final[int] = safe_int(_get_env("UPLOAD_TIMEOUT"), 600)

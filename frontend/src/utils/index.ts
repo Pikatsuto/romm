@@ -539,9 +539,51 @@ export function getSupportedEJSCores(platformSlug: string): string[] {
 }
 
 /**
+ * Core tier classification for RetroArch cores.
+ * - light: 8-bit/16-bit consoles, always enabled
+ * - medium: N64, Saturn, PSX, Arcade (fbneo), DOS, Amiga, etc.
+ * - heavy: Dolphin, Citra, PCSX2, PPSSPP, Flycast, MAME full, ScummVM
+ */
+type CoreTier = "light" | "medium" | "heavy";
+
+/**
+ * Get the tier of a RetroArch core from heartbeat data.
+ * @param core The core name (with ra- prefix).
+ * @param heartbeat The heartbeat object containing core tier data.
+ * @returns The tier of the core.
+ */
+export function getCoreTier(core: string, heartbeat: Heartbeat): CoreTier {
+  // Remove ra- prefix to look up in heartbeat data
+  const coreName = core.replace(/^ra-/, "");
+  const coreConfig = heartbeat.EMULATION.RETROARCH_CORES?.[coreName];
+  return (coreConfig?.tier as CoreTier) || "light";
+}
+
+/**
+ * Filter cores based on enabled tiers.
+ * @param cores Array of core names.
+ * @param heartbeat The heartbeat object containing tier settings.
+ * @returns Filtered array of cores.
+ */
+export function filterCoresByTier(
+  cores: string[],
+  heartbeat: Heartbeat
+): string[] {
+  const enableMedium = heartbeat.EMULATION.RETROARCH_ENABLE_MEDIUM_CORES;
+  const enableHeavy = heartbeat.EMULATION.RETROARCH_ENABLE_HEAVY_CORES;
+
+  return cores.filter((core) => {
+    const tier = getCoreTier(core, heartbeat);
+    if (tier === "heavy") return enableHeavy;
+    if (tier === "medium") return enableMedium;
+    return true; // light cores always enabled
+  });
+}
+
+/**
  * Map of supported RetroArch cores for each platform.
  * Cores are prefixed with "ra-" to distinguish them from EmulatorJS cores.
- * Only includes platforms with well-maintained RetroArch cores.
+ * Only includes cores that are available on the libretro buildbot.
  */
 const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   // Nintendo consoles
@@ -554,8 +596,6 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   "64dd": ["ra-mupen64plus_next"],
   ngc: ["ra-dolphin"],
   wii: ["ra-dolphin"],
-  wiiu: ["ra-cemu"],
-  switch: ["ra-yuzu"],
 
   // Nintendo handhelds
   gb: ["ra-gambatte", "ra-sameboy", "ra-mgba"],
@@ -564,7 +604,7 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   nds: ["ra-desmume", "ra-melonds"],
   "3ds": ["ra-citra"],
   "pokemon-mini": ["ra-pokemini"],
-  virtualboy: ["ra-beetle_vb"],
+  virtualboy: ["ra-mednafen_vb"],
 
   // Sega consoles
   genesis: ["ra-genesis_plus_gx", "ra-picodrive"],
@@ -576,8 +616,8 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   sega32: ["ra-picodrive"],
   segacd: ["ra-genesis_plus_gx"],
   segacd32: ["ra-genesis_plus_gx", "ra-picodrive"],
-  saturn: ["ra-beetle_saturn", "ra-yabause", "ra-kronos"],
-  dc: ["ra-flycast", "ra-redream"],
+  saturn: ["ra-mednafen_saturn", "ra-yabause", "ra-kronos"],
+  dc: ["ra-flycast"],
   sms: ["ra-genesis_plus_gx", "ra-picodrive"],
   "sega-mark-iii": ["ra-genesis_plus_gx"],
   "sega-master-system-ii": ["ra-genesis_plus_gx"],
@@ -590,11 +630,9 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   pico: ["ra-picodrive"],
 
   // Sony consoles
-  psx: ["ra-pcsx_rearmed", "ra-beetle_psx_hw", "ra-swanstation"],
+  psx: ["ra-pcsx_rearmed", "ra-mednafen_psx_hw", "ra-swanstation"],
   ps2: ["ra-pcsx2"],
-  ps3: ["ra-rpcs3"],
   psp: ["ra-ppsspp"],
-  psvita: ["ra-vita3k"],
 
   // Atari
   atari2600: ["ra-stella"],
@@ -603,15 +641,15 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   atari8bit: ["ra-atari800"],
   atari800: ["ra-atari800"],
   "atari-st": ["ra-hatari"],
-  lynx: ["ra-handy", "ra-beetle_lynx"],
+  lynx: ["ra-handy", "ra-mednafen_lynx"],
   jaguar: ["ra-virtualjaguar"],
   "atari-jaguar-cd": ["ra-virtualjaguar"],
 
   // NEC
-  tg16: ["ra-beetle_pce", "ra-mednafen_pce_fast"],
-  "turbografx-cd": ["ra-beetle_pce"],
-  supergrafx: ["ra-beetle_supergrafx"],
-  "pc-fx": ["ra-beetle_pcfx"],
+  tg16: ["ra-mednafen_pce", "ra-mednafen_pce_fast"],
+  "turbografx-cd": ["ra-mednafen_pce"],
+  supergrafx: ["ra-mednafen_supergrafx"],
+  "pc-fx": ["ra-mednafen_pcfx"],
   "pc-8800-series": ["ra-quasi88"],
   "pc-9800-series": ["ra-np2kai"],
 
@@ -620,8 +658,8 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   "neo-geo-cd": ["ra-fbneo", "ra-neocd"],
   neogeoaes: ["ra-fbneo"],
   neogeomvs: ["ra-fbneo"],
-  "neo-geo-pocket": ["ra-beetle_ngp"],
-  "neo-geo-pocket-color": ["ra-beetle_ngp"],
+  "neo-geo-pocket": ["ra-mednafen_ngp"],
+  "neo-geo-pocket-color": ["ra-mednafen_ngp"],
 
   // Other consoles
   "3do": ["ra-opera"],
@@ -648,8 +686,8 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   acpc: ["ra-cap32", "ra-crocods"],
   "amstrad-gx4000": ["ra-cap32"],
   zxs: ["ra-fuse"],
-  zx81: ["ra-eightyone"],
-  zx80: ["ra-eightyone"],
+  zx81: ["ra-81"],
+  zx80: ["ra-81"],
   "zx-spectrum-next": ["ra-fuse"],
   msx: ["ra-bluemsx", "ra-fmsx"],
   msx2: ["ra-bluemsx"],
@@ -658,20 +696,15 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   dos: ["ra-dosbox_pure", "ra-dosbox_svn"],
   "sharp-x68000": ["ra-px68k"],
   x1: ["ra-x1"],
-  "pc-6001": ["ra-pc6001"],
-  "fm-7": ["ra-xm7"],
-  "fm-towns": ["ra-tsugaru"],
-  bbcmicro: ["ra-b-em"],
   "apple-iigs": ["ra-mame"],
   appleii: ["ra-mame"],
   scummvm: ["ra-scummvm"],
 
   // Handhelds
-  wonderswan: ["ra-beetle_wswan"],
-  "wonderswan-color": ["ra-beetle_wswan"],
-  swancrystal: ["ra-beetle_wswan"],
+  wonderswan: ["ra-mednafen_wswan"],
+  "wonderswan-color": ["ra-mednafen_wswan"],
+  swancrystal: ["ra-mednafen_wswan"],
   "g-and-w": ["ra-gw"],
-  "game-dot-com": ["ra-gamecom"],
   "mega-duck-slash-cougar-boy": ["ra-sameduck"],
   supervision: ["ra-potator"],
   hartung: ["ra-potator"],
@@ -689,13 +722,10 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   pocketstation: ["ra-mame"],
   vmu: ["ra-vemulator"],
   uzebox: ["ra-uzem"],
-  arduboy: ["ra-arduboy"],
   pokitto: ["ra-mame"],
   "wasm-4": ["ra-wasm4"],
   "philips-vg-5000": ["ra-mame"],
   aquarius: ["ra-mame"],
-  oric: ["ra-oricutron"],
-  atmos: ["ra-oricutron"],
   "jupiter-ace": ["ra-mame"],
   "sam-coupe": ["ra-mame"],
   "thomson-mo5": ["ra-theodore"],
@@ -714,7 +744,6 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
   "trs-80-color-computer": ["ra-mame"],
   cpet: ["ra-vice_xpet"],
   atom: ["ra-mame"],
-  "acorn-electron": ["ra-elkulator"],
   "acorn-archimedes": ["ra-mame"],
   "dragon-32-slash-64": ["ra-mame"],
   "camputers-lynx": ["ra-mame"],
@@ -738,28 +767,55 @@ const _RETROARCH_CORES_MAP: Record<string, string[]> = {
 export type RetroArchPlatformSlug = keyof typeof _RETROARCH_CORES_MAP;
 
 /**
- * Get supported cores for a platform (EmulatorJS + RetroArch).
- * RetroArch cores have "ra-" prefix and are only included if RetroArch is enabled.
+ * Get RetroArch cores for a platform from heartbeat data.
+ * Falls back to hardcoded map if heartbeat doesn't have the data.
  *
  * @param platformSlug The platform slug.
- * @param retroarchEnabled Whether RetroArch streaming is enabled.
+ * @param heartbeat The heartbeat object containing platform mappings.
+ * @returns An array of RetroArch core names with "ra-" prefix.
+ */
+function getRetroArchCoresForPlatform(
+  platformSlug: string,
+  heartbeat: Heartbeat
+): string[] {
+  const slug = platformSlug.toLowerCase();
+
+  // Try to get cores from heartbeat data first
+  const platformCores = heartbeat.EMULATION.RETROARCH_PLATFORMS?.[slug];
+  if (platformCores && platformCores.length > 0) {
+    // Add ra- prefix to cores from heartbeat
+    return platformCores.map((core) => `ra-${core}`);
+  }
+
+  // Fallback to hardcoded map
+  return _RETROARCH_CORES_MAP[slug as RetroArchPlatformSlug] || [];
+}
+
+/**
+ * Get supported cores for a platform (EmulatorJS + RetroArch).
+ * RetroArch cores have "ra-" prefix and are only included if RetroArch is enabled.
+ * Cores are filtered based on tier settings (medium/heavy).
+ *
+ * @param platformSlug The platform slug.
+ * @param heartbeat The heartbeat object containing emulation settings.
  * @returns An array of supported cores.
  */
 export function getSupportedCores(
   platformSlug: string,
-  retroarchEnabled: boolean = false
+  heartbeat: Heartbeat
 ): string[] {
   const ejsCores = getSupportedEJSCores(platformSlug);
 
-  if (!retroarchEnabled) {
+  if (!heartbeat.EMULATION.RETROARCH_ENABLED) {
     return ejsCores;
   }
 
-  const raCores = _RETROARCH_CORES_MAP[
-    platformSlug.toLowerCase() as RetroArchPlatformSlug
-  ] || [];
+  const raCores = getRetroArchCoresForPlatform(platformSlug, heartbeat);
 
-  return [...ejsCores, ...raCores];
+  // Filter RetroArch cores based on tier settings
+  const filteredRaCores = filterCoresByTier(raCores, heartbeat);
+
+  return [...ejsCores, ...filteredRaCores];
 }
 
 /**
