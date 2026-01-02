@@ -14,7 +14,7 @@
  * @component
  */
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch, nextTick, computed } from "vue";
 import { useRouter } from "vue-router";
 import type { FirmwareSchema, SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
@@ -92,6 +92,10 @@ const showFlash = ref(false);
 
 /** Whether to rotate the video (horizontal core in portrait mode) */
 const needsRotation = ref(false);
+/** User toggle to override rotation (XOR with needsRotation) */
+const rotationToggled = ref(false);
+/** Effective rotation state (needsRotation XOR rotationToggled - toggle inverts default) */
+const effectiveRotation = computed(() => needsRotation.value !== rotationToggled.value);
 
 /** Timestamp of last mouse move event (for throttling) */
 let lastMouseMoveTime = 0;
@@ -763,7 +767,7 @@ function handleSettingsChanged(newSettings: any) {
     <div
       :class="{
         hidden: isLoading || error,
-        rotated: needsRotation && gameControls.isFullscreen.value
+        rotated: effectiveRotation && gameControls.isFullscreen.value
       }"
     >
       <!-- Video Stream -->
@@ -792,8 +796,9 @@ function handleSettingsChanged(newSettings: any) {
         :core-options-from-backend="coreOptions"
         :is-fullscreen="gameControls.isFullscreen.value"
         :container="containerRef"
-        :needs-rotation="needsRotation && gameControls.isFullscreen.value"
+        :needs-rotation="effectiveRotation && gameControls.isFullscreen.value"
         @fullscreen="gameControls.toggleFullscreen(containerRef)"
+        @toggle-rotation="rotationToggled = !rotationToggled"
         @quick-save="handleQuickSave"
         @quick-load="handleQuickLoad"
         @load-state="handleLoadState"

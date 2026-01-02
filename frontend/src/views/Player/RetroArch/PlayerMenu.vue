@@ -68,6 +68,8 @@ const emit = defineEmits<{
   settingsChanged: [settings: typeof settings.value];
   /** Exit player without saving */
   exit: [];
+  /** Toggle rotation override */
+  toggleRotation: [];
 }>();
 
 // Menu visibility state
@@ -344,83 +346,82 @@ defineExpose({
       <v-chip size="x-small" color="primary" class="ml-2">{{ core }}</v-chip>
     </div>
 
-    <div
-      class="menu-bar-right"
-      v-if="!isPortrait"
-    >
-      <!-- Hidden in portrait mode - accessible via menu -->
-      <v-btn
-        :icon="isPaused ? 'mdi-play' : 'mdi-pause'"
-        size="small"
-        variant="text"
-        color="white"
-        :title="isPaused ? 'Resume' : 'Pause'"
-        @click="handlePause"
-      />
-      <v-btn
-        icon="mdi-restart"
-        size="small"
-        variant="text"
-        color="white"
-        title="Restart"
-        @click="handleRestart"
-      />
-      <v-btn
-        icon="mdi-camera"
-        size="small"
-        variant="text"
-        color="white"
-        title="Screenshot"
-        @click="handleScreenshot"
-      />
-      <v-btn
-        icon="mdi-content-save"
-        size="small"
-        variant="text"
-        color="white"
-        title="Quick Save (F2)"
-        @click="handleQuickSave"
-      />
-      <v-btn
-        icon="mdi-folder-open"
-        size="small"
-        variant="text"
-        color="white"
-        title="Quick Load (F4)"
-        @click="handleQuickLoad"
-      />
-      <v-btn
-        :icon="isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen'"
-        size="small"
-        variant="text"
-        color="white"
-        :title="isFullscreen ? 'Exit Fullscreen (F11)' : 'Fullscreen (F11)'"
-        @click="handleFullscreen"
-      />
-      <v-btn
-        icon="mdi-cog"
-        size="small"
-        variant="text"
-        color="white"
-        title="Settings"
-        @click="showSettings = !showSettings"
-      />
-      <v-btn
-        icon="mdi-content-save-move"
-        size="small"
-        variant="text"
-        color="white"
-        title="Save & Quit"
-        @click="handleSaveAndQuit"
-      />
-      <v-btn
-        icon="mdi-close"
-        size="small"
-        variant="text"
-        color="white"
-        title="Exit (ESC)"
-        @click="handleExit"
-      />
+    <div class="menu-bar-right">
+      <template v-if="!isPortrait">
+        <!-- Hidden in portrait mode - accessible via menu -->
+        <v-btn
+          :icon="isPaused ? 'mdi-play' : 'mdi-pause'"
+          size="small"
+          variant="text"
+          color="white"
+          :title="isPaused ? 'Resume' : 'Pause'"
+          @click="handlePause"
+        />
+        <v-btn
+          icon="mdi-restart"
+          size="small"
+          variant="text"
+          color="white"
+          title="Restart"
+          @click="handleRestart"
+        />
+        <v-btn
+          icon="mdi-camera"
+          size="small"
+          variant="text"
+          color="white"
+          title="Screenshot"
+          @click="handleScreenshot"
+        />
+        <v-btn
+          icon="mdi-content-save"
+          size="small"
+          variant="text"
+          color="white"
+          title="Quick Save (F2)"
+          @click="handleQuickSave"
+        />
+        <v-btn
+          icon="mdi-folder-open"
+          size="small"
+          variant="text"
+          color="white"
+          title="Quick Load (F4)"
+          @click="handleQuickLoad"
+        />
+        <v-btn
+          :icon="isFullscreen ? 'mdi-fullscreen-exit' : 'mdi-fullscreen'"
+          size="small"
+          variant="text"
+          color="white"
+          :title="isFullscreen ? 'Exit Fullscreen (F11)' : 'Fullscreen (F11)'"
+          @click="handleFullscreen"
+        />
+        <v-btn
+          icon="mdi-cog"
+          size="small"
+          variant="text"
+          color="white"
+          title="Settings"
+          @click="showSettings = !showSettings"
+        />
+        <v-btn
+          icon="mdi-content-save-move"
+          size="small"
+          variant="text"
+          color="white"
+          title="Save & Quit"
+          @click="handleSaveAndQuit"
+        />
+        <v-btn
+          icon="mdi-close"
+          size="small"
+          variant="text"
+          color="white"
+          title="Exit (ESC)"
+          @click="handleExit"
+        />
+      </template>
     </div>
   </div>
 
@@ -476,6 +477,14 @@ defineExpose({
           <template #append>
             <v-chip size="x-small" variant="outlined">F11</v-chip>
           </template>
+        </v-list-item>
+
+        <v-list-item
+          v-if="isPortrait"
+          :prepend-icon="needsRotation ? 'mdi-screen-rotation-lock' : 'mdi-screen-rotation'"
+          @click="emit('toggleRotation'); closeMenu()"
+        >
+          <v-list-item-title>{{ needsRotation ? 'Disable Rotation' : 'Enable Rotation' }}</v-list-item-title>
         </v-list-item>
 
         <v-divider class="my-2" />
