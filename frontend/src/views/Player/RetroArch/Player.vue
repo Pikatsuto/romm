@@ -406,6 +406,9 @@ function handleKeyUp(event: KeyboardEvent) {
 }
 
 function handleMouseMove(event: MouseEvent) {
+  // Always show menu bar on mouse movement over video
+  handleContainerMouseMove();
+
   if (!socket.value || !sessionId.value || !videoRef.value || !touchscreenRegion.value) return;
 
   // Throttle mousemove events to prevent flooding
@@ -446,6 +449,9 @@ function handleMouseMove(event: MouseEvent) {
 }
 
 function handleMouseDown(event: MouseEvent) {
+  // Always show menu bar on click over video
+  handleContainerMouseMove();
+
   if (!socket.value || !sessionId.value || !videoRef.value || !touchscreenRegion.value) return;
 
   event.preventDefault();
@@ -786,6 +792,7 @@ function handleSettingsChanged(newSettings: any) {
         :core-options-from-backend="coreOptions"
         :is-fullscreen="gameControls.isFullscreen.value"
         :container="containerRef"
+        :needs-rotation="needsRotation && gameControls.isFullscreen.value"
         @fullscreen="gameControls.toggleFullscreen(containerRef)"
         @quick-save="handleQuickSave"
         @quick-load="handleQuickLoad"

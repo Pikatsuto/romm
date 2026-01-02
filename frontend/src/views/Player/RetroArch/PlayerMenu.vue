@@ -32,6 +32,8 @@ const props = defineProps<{
   coreOptionsFromBackend: Record<string, string>;
   /** Container element for attaching dialogs (needed for fullscreen) */
   container?: HTMLElement;
+  /** Whether the player is rotated (horizontal core in portrait fullscreen) */
+  needsRotation?: boolean;
 }>();
 
 /** Vuetify display breakpoints */
@@ -423,7 +425,7 @@ defineExpose({
   </div>
 
   <!-- Main Menu Modal -->
-  <v-dialog v-model="showMenu" max-width="500" :attach="container" @click:outside="closeMenu">
+  <v-dialog v-model="showMenu" max-width="500" :attach="container" :content-class="needsRotation ? 'dialog-rotated' : ''" @click:outside="closeMenu">
     <v-card class="menu-card">
       <v-card-title class="d-flex align-center pa-4">
         <v-icon class="mr-2">mdi-menu</v-icon>
@@ -494,7 +496,7 @@ defineExpose({
   </v-dialog>
 
   <!-- Settings Modal -->
-  <v-dialog v-model="showSettings" max-width="800" :attach="container" @click:outside="closeMenu">
+  <v-dialog v-model="showSettings" max-width="800" :attach="container" :content-class="needsRotation ? 'dialog-rotated' : ''" @click:outside="closeMenu">
     <v-card>
       <v-card-title class="d-flex align-center pa-4">
         <v-icon class="mr-2">mdi-cog</v-icon>
@@ -789,6 +791,7 @@ defineExpose({
     :width="mdAndUp ? '60vw' : '95vw'"
     max-width="800"
     :attach="container"
+    :content-class="needsRotation ? 'dialog-rotated' : ''"
     @click:outside="closeLoadStateDialog"
   >
     <v-card>
@@ -903,5 +906,20 @@ defineExpose({
 .menu-bar.menu-open {
   opacity: 1;
   pointer-events: all;
+}
+</style>
+
+<!-- Global styles for dialog rotation (not scoped because dialogs render outside component) -->
+<style>
+/* Rotate dialogs when player is in rotated fullscreen mode */
+.dialog-rotated {
+  rotate: 90deg;
+  /* Swap width/height constraints for rotated view */
+  width: 90vh !important;
+}
+
+.dialog-rotated .v-card {
+  max-height: 75vw;
+  overflow-y: auto;
 }
 </style>
