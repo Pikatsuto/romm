@@ -90,6 +90,9 @@ const coreOptions = ref<Record<string, string>>({});
 /** Whether to show the screenshot flash animation */
 const showFlash = ref(false);
 
+/** Whether to rotate the video (horizontal core in portrait mode) */
+const needsRotation = ref(false);
+
 /** Timestamp of last mouse move event (for throttling) */
 let lastMouseMoveTime = 0;
 /** Minimum ms between mouse move events (~120 FPS) */
@@ -161,6 +164,7 @@ async function startSession() {
     sessionId.value = data.session_id;
     touchscreenRegion.value = data.touchscreen_region || null;
     coreOptions.value = data.core_options || {};
+    needsRotation.value = data.needs_rotation || false;
 
     // Store ICE servers from backend (includes TURN if configured)
     if (data.ice_servers && data.ice_servers.length > 0) {
@@ -750,44 +754,50 @@ function handleSettingsChanged(newSettings: any) {
       </v-btn>
     </div>
 
-    <!-- Video Stream -->
-    <video
-      ref="videoRef"
-      autoplay
-      playsinline
-      class="game-video"
-      :class="{ hidden: isLoading || error }"
-      @mousemove="handleMouseMove"
-      @mousedown="handleMouseDown"
-      @mouseup="handleMouseUp"
-      @touchstart="handleTouchStart"
-      @touchmove="handleTouchMove"
-      @touchend="handleTouchEnd"
-      @touchcancel="handleTouchCancel"
-    />
+    <div
+      :class="{
+        hidden: isLoading || error,
+        rotated: needsRotation && gameControls.isFullscreen.value
+      }"
+    >
+      <!-- Video Stream -->
+      <video
+        ref="videoRef"
+        autoplay
+        playsinline
+        class="game-video"
+        @mousemove="handleMouseMove"
+        @mousedown="handleMouseDown"
+        @mouseup="handleMouseUp"
+        @touchstart="handleTouchStart"
+        @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd"
+        @touchcancel="handleTouchCancel"
+      />
 
-    <!-- Player Menu (EmulatorJS-like UI) -->
-    <PlayerMenu
-      ref="playerMenuRef"
-      v-if="!isLoading && !error && sessionId && socket"
-      :rom="rom"
-      :core="core"
-      :session-id="sessionId"
-      :socket="socket"
-      :core-options-from-backend="coreOptions"
-      :is-fullscreen="gameControls.isFullscreen.value"
-      :container="containerRef"
-      @fullscreen="gameControls.toggleFullscreen(containerRef)"
-      @quick-save="handleQuickSave"
-      @quick-load="handleQuickLoad"
-      @load-state="handleLoadState"
-      @restart="handleRestart"
-      @screenshot="handleScreenshot"
-      @toggle-pause="handleTogglePause"
-      @save-and-quit="handleSaveAndQuit"
-      @settings-changed="handleSettingsChanged"
-      @exit="exitToGameDetails"
-    />
+      <!-- Player Menu (EmulatorJS-like UI) -->
+      <PlayerMenu
+        ref="playerMenuRef"
+        v-if="!isLoading && !error && sessionId && socket"
+        :rom="rom"
+        :core="core"
+        :session-id="sessionId"
+        :socket="socket"
+        :core-options-from-backend="coreOptions"
+        :is-fullscreen="gameControls.isFullscreen.value"
+        :container="containerRef"
+        @fullscreen="gameControls.toggleFullscreen(containerRef)"
+        @quick-save="handleQuickSave"
+        @quick-load="handleQuickLoad"
+        @load-state="handleLoadState"
+        @restart="handleRestart"
+        @screenshot="handleScreenshot"
+        @toggle-pause="handleTogglePause"
+        @save-and-quit="handleSaveAndQuit"
+        @settings-changed="handleSettingsChanged"
+        @exit="exitToGameDetails"
+      />
+    </div>
 
     <!-- Gamepad Connected Indicator (bottom left) -->
     <div v-if="!isLoading && !error && gameControls.gamepadConnected.value" class="gamepad-indicator">
@@ -842,8 +852,31 @@ function handleSettingsChanged(newSettings: any) {
   }
 }
 
-.game-video.hidden {
+.hidden {
   display: none;
+}
+
+/* Rotated video for horizontal cores in portrait fullscreen mode */
+/* Like watching a video on a phone - rotate 90° to fill the screen */
+.rotated {
+  rotate: 90deg;
+
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+
+  display: flex;
+  justify-content: center;
+
+  /* Swap dimensions: width becomes height, height becomes width */
+  min-width: 100vh;
+  min-height: 100vw;
+}
+
+.rotated>.game-video {
+  height: 100vw;
+  width: min-content;
 }
 
 .status-overlay {

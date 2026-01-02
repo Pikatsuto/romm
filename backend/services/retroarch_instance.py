@@ -674,6 +674,7 @@ class RetroArchInstance:
         width: int = 1280,
         height: int = 720,
         language: Optional[str] = None,
+        needs_rotation: bool = False,
     ):
         """Initialize a RetroArch instance.
 
@@ -697,6 +698,11 @@ class RetroArchInstance:
         self.width = width
         self.height = height
         self.language = language
+        self.needs_rotation = needs_rotation
+        self.is_portrait = (
+            self.height > self.width
+            and not needs_rotation
+        )
 
         self.retroarch_process: Optional[subprocess.Popen] = None
         self.gstreamer: Optional[GStreamerWebRTC] = None
@@ -711,6 +717,17 @@ class RetroArchInstance:
         self.screenshots_dir = self.session_dir / "screenshots"
         self.config_dir = self.session_dir / "config"
         self.system_dir = self.session_dir / "system"
+
+    def is_core_horizontal(self) -> bool:
+        """Check if this core has horizontal native aspect ratio.
+
+        Returns:
+            True if the core's native width > height (horizontal),
+            False if height >= width (vertical, like DS/3DS).
+        """
+        zone = CORE_POINTER_ZONES.get(self.core, {})
+        native = zone.get("native", (4, 3))
+        return native[0] > native[1]
 
     def _setup_session_directories(self):
         """Create per-session users directories."""
@@ -867,8 +884,7 @@ class RetroArchInstance:
                 f.write('video_font_enable = "true"\n')
 
                 # Portrait mode: align game to top instead of center
-                is_portrait = self.height > self.width
-                if is_portrait:
+                if self.is_portrait:
                     # Enable custom viewport and set position to top
                     f.write('video_viewport_custom = "true"\n')
                     f.write('custom_viewport_x = "0"\n')
@@ -934,7 +950,7 @@ class RetroArchInstance:
                 f"/usr/lib/libretro/{self.core}_libretro.so",
             ]
             # Portrait mode: use --size to set window dimensions at top
-            if is_portrait:
+            if self.is_portrait:
                 cmd.append(f"--size={self.width}x{portrait_height}")
             else:
                 cmd.append("--fullscreen")
@@ -1355,9 +1371,8 @@ class RetroArchInstance:
         native = zone.get("native", (4, 3))
 
         native_ratio = native[0] / native[1]
-        is_portrait = self.height > self.width
 
-        if is_portrait:
+        if self.is_portrait:
             # Portrait mode: game fills width, aligned to top
             game_width = self.width
             game_height = native[1] * self.width // native[0]
@@ -1748,13 +1763,9 @@ class RetroArchInstance:
         y_offset = wz_top
         width_ratio = 1.0 - wz_left - wz_right
         height_ratio = 1.0 - wz_top - wz_bottom
-
-        # For dual-screen consoles in portrait mode, recalculate based on
-        # the actual video layout (game aligned to top, fills width)
-        is_portrait = self.height > self.width
         zone_type = zone.get("type", "")
 
-        if is_portrait and zone_type == "dual_screen":
+        if self.is_portrait and zone_type == "dual_screen":
             # In portrait mode, the game video fills the screen width
             # and is aligned to top. The touch area is the bottom portion.
             native = zone.get("native", (256, 384))

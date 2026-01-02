@@ -25,7 +25,7 @@ from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
 
 from services.xvfb_manager import XvfbManager, calculate_optimal_resolution
-from services.retroarch_instance import RetroArchInstance
+from services.retroarch_instance import RetroArchInstance, CORE_POINTER_ZONES
 from services.retroarch_sync import (
     restore_save_to_session,
     restore_state_to_session,
@@ -425,6 +425,22 @@ class RetroArchDaemon:
                 os.getenv("RETROARCH_MAX_RESOLUTION")
             )
 
+            # Check if we need to rotate for horizontal cores in portrait mode
+            # Portrait player + horizontal core = create horizontal + rotate
+            is_portrait_player = xvfb_height > xvfb_width
+            zone = CORE_POINTER_ZONES.get(session.core, {})
+            native = zone.get("native", (4, 3))
+            is_horizontal_core = native[0] > native[1]
+            needs_rotation = is_portrait_player and is_horizontal_core
+
+            if needs_rotation:
+                # Swap dimensions to create horizontal xvfb
+                xvfb_width, xvfb_height = xvfb_height, xvfb_width
+                logger.info(
+                    f"Horizontal core in portrait mode: using rotated xvfb "
+                    f"{xvfb_width}x{xvfb_height}"
+                )
+
             display_num = await self.xvfb_manager.allocate_display(
                 xvfb_width, xvfb_height
             )
@@ -436,8 +452,6 @@ class RetroArchDaemon:
             # Determine state_path if state_id is provided
             state_path = None
 
-            logger.info(f"[RetroArch Language Debug] Daemon creating instance with language: {session.language}")
-
             instance = RetroArchInstance(
                 session_id=session.session_id,
                 rom_path=rom_path,
@@ -446,6 +460,7 @@ class RetroArchDaemon:
                 width=xvfb_width,
                 height=xvfb_height,
                 language=session.language,
+                needs_rotation=needs_rotation,
             )
 
             # Create session directories BEFORE restoring saves/states
@@ -528,6 +543,12 @@ class RetroArchDaemon:
                     json.dumps(region_data),
                     ex=300
                 )
+
+            # Store rotation flag for frontend
+            # (horizontal core in portrait mode)
+            if needs_rotation:
+                rotation_key = f"retroarch:needs_rotation:{session.session_id}"
+                await async_cache.set(rotation_key, "true", ex=300)
 
             # Update session
             session.webrtc_offer = offer_sdp

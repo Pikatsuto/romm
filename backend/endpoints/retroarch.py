@@ -70,6 +70,7 @@ class StartSessionResponse(BaseModel):
     touchscreen_region: TouchscreenRegion | None = None  # Only for cores with touchscreen
     core_options: dict[str, str] = {}  # Core-specific options loaded from RetroArch
     ice_servers: list[IceServer] = []  # ICE servers (STUN/TURN) for WebRTC
+    needs_rotation: bool = False  # True when horizontal core in portrait mode
 
 
 class AnswerSessionRequest(BaseModel):
@@ -272,12 +273,17 @@ async def start_stream(
                     credential=turn_password,
                 ))
 
+            # Check if rotation is needed (horizontal core in portrait mode)
+            rotation_key = f"retroarch:needs_rotation:{session_id}"
+            needs_rotation = await async_cache.get(rotation_key) == "true"
+
             return StartSessionResponse(
                 session_id=session_id,
                 webrtc_offer=updated_session.webrtc_offer,
                 touchscreen_region=touchscreen_region,
                 core_options=core_options,
                 ice_servers=ice_servers,
+                needs_rotation=needs_rotation,
             )
 
         # Check for error state

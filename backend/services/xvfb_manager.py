@@ -178,11 +178,19 @@ class XvfbManager:
         for display_num, display in self.displays.items():
             not_in_use = not display.in_use
             process_running = display.process.poll() is None
-            resolution_matches = display.width == width and display.height == height
-            is_available = not_in_use and process_running and resolution_matches
+            resolution_matches = (
+                display.width == width and
+                display.height == height
+            )
+            is_available = (
+                not_in_use and
+                process_running and
+                resolution_matches
+            )
             if is_available:
                 display.in_use = True
-                logger.info(f"Reusing Xvfb display :{display_num} ({width}x{height})")
+                msg = f"Reusing Xvfb display :{display_num} ({width}x{height})"
+                logger.info(msg)
                 return display_num
         return None
 
