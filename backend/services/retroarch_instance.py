@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 # - GAMEPAD_SCREEN: Wii U - GamePad has separate touchscreen
 # - FULL_SCREEN_POINTER: Wii, light guns, mouse-based systems
 # - HANDHELD_TOUCH: Vita, Switch - full screen touch
+#
+# RetroArch device types for pointer input:
+# - RETRO_DEVICE_POINTER = 6 (absolute screen coordinates, touch-like)
+# - RETRO_DEVICE_LIGHTGUN = 4 (absolute coordinates for light guns)
+# - RETRO_DEVICE_MOUSE = 2 (relative movement - NOT recommended for touch)
+#
+# pointer_port: Which input port to set to pointer mode (0=p1, 1=p2, etc.)
+# pointer_device: RetroArch device ID (6=pointer, 4=lightgun)
+# core_touch_options: Core-specific options to enable touch/pointer mode
 CORE_POINTER_ZONES = {
     # =========================================================================
     # NINTENDO DS - Two 256x192 screens stacked vertically, bottom is touch
@@ -41,6 +50,14 @@ CORE_POINTER_ZONES = {
         "white_zone_left": 0.0,
         "white_zone_right": 0.0,
         "type": "dual_screen",
+        "pointer_port": 1,          # Touch input on port 2 (index 1)
+        "pointer_device": 6,        # RETRO_DEVICE_POINTER
+        "core_touch_options": {
+            "desmume_pointer_type": "touch",
+            "desmume_pointer_device_l": "emulated",
+            "desmume_pointer_device_r": "emulated",
+            "desmume_pointer_colour": "white",
+        },
     },
     "melonds": {
         "native": (256, 384),
@@ -50,6 +67,11 @@ CORE_POINTER_ZONES = {
         "white_zone_left": 0.0,
         "white_zone_right": 0.0,
         "type": "dual_screen",
+        "pointer_port": 1,          # Touch input on port 2 (index 1)
+        "pointer_device": 6,        # RETRO_DEVICE_POINTER
+        "core_touch_options": {
+            "melonds_touch_mode": "Touch",
+        },
     },
     # =========================================================================
     # NINTENDO 3DS - Top 400x240 (wide), bottom 320x240 (touch, narrower)
@@ -877,6 +899,35 @@ class RetroArchInstance:
                 else:
                     logger.info(f"[RetroArch Language Debug] Instance: no language set (self.language={self.language})")
 
+                # Configure pointer/touch input for cores that support it
+                # This sets the input device to RETRO_DEVICE_POINTER (6) for
+                # absolute screen coordinates instead of relative mouse movement
+                pointer_zone = CORE_POINTER_ZONES.get(self.core)
+                if pointer_zone:
+                    pointer_port = pointer_zone.get("pointer_port")
+                    pointer_device = pointer_zone.get("pointer_device")
+                    if pointer_port is not None and pointer_device is not None:
+                        # Set the device type for the specified port
+                        # port 0 = p1, port 1 = p2, etc.
+                        port_num = pointer_port + 1  # RetroArch uses 1-indexed
+                        f.write(f'input_libretro_device_p{port_num} = "{pointer_device}"\n')
+                        logger.info(
+                            f"[RetroArch Touch] Set port {port_num} to device "
+                            f"{pointer_device} for core {self.core}"
+                        )
+
+            # Write core-specific touch options to core options file
+            pointer_zone = CORE_POINTER_ZONES.get(self.core)
+            if pointer_zone:
+                core_touch_opts = pointer_zone.get("core_touch_options", {})
+                for opt_name, opt_value in core_touch_opts.items():
+                    self._write_core_language_option(
+                        core_options_path, opt_name, opt_value
+                    )
+                    logger.info(
+                        f"[RetroArch Touch] Set core option: {opt_name}={opt_value}"
+                    )
+
             # Start RetroArch
             cmd = [
                 "retroarch",
@@ -1155,9 +1206,13 @@ class RetroArchInstance:
         Processes input events from the browser and forwards them
         to the Xvfb display using xdotool commands.
 
+        Supports both mouse events (with pointer lock) and direct touch events.
+        Touch events provide a more natural experience on touchscreen devices
+        by bypassing the pointer lock mechanism.
+
         Args:
             event_data: Input event dict containing 'type' and event-specific
-                keys ('key' for keyboard, 'x'/'y'/'button' for mouse).
+                keys ('key' for keyboard, 'x'/'y'/'button' for mouse/touch).
         """
         try:
             event_type = event_data.get("type", "")
@@ -1183,6 +1238,28 @@ class RetroArchInstance:
                 await self._xdotool("mousedown", button)
 
             elif event_type == "mouseup":
+                button = str(event_data.get("button", 0) + 1)
+                await self._xdotool("mouseup", button)
+
+            # Touch events - direct touch input for pointer-based cores
+            # These bypass the pointer lock mechanism for a more natural
+            # touchscreen experience on mobile devices
+            elif event_type == "touchmove":
+                x, y = event_data.get("x", 0), event_data.get("y", 0)
+                xvfb_x, xvfb_y = self._calculate_mouse_position(x, y)
+                args = ("mousemove", str(xvfb_x), str(xvfb_y))
+                self._xdotool_fire_and_forget(*args)
+
+            elif event_type == "touchstart":
+                # Move to touch position first, then press
+                x, y = event_data.get("x", 0), event_data.get("y", 0)
+                xvfb_x, xvfb_y = self._calculate_mouse_position(x, y)
+                # Move and click in sequence
+                await self._xdotool("mousemove", str(xvfb_x), str(xvfb_y))
+                button = str(event_data.get("button", 0) + 1)
+                await self._xdotool("mousedown", button)
+
+            elif event_type == "touchend":
                 button = str(event_data.get("button", 0) + 1)
                 await self._xdotool("mouseup", button)
 

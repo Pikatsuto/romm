@@ -8,7 +8,7 @@
  * - WebRTC video/audio streaming from server-side RetroArch
  * - Keyboard and mouse input forwarding via SocketIO
  * - Gamepad support via useGameControls composable
- * - Touchscreen support for DS/3DS games with pointer lock
+ * - Touchscreen support for DS/3DS games with absolute coordinates
  * - EmulatorJS-style menu overlay for settings and commands
  *
  * @component
@@ -87,19 +87,21 @@ const touchscreenRegion = ref<{
 /** Core-specific options loaded from backend config */
 const coreOptions = ref<Record<string, string>>({});
 
-/** Whether pointer is locked to video element (for touchscreen input) */
-const isPointerLocked = ref(false);
 /** Whether to show the screenshot flash animation */
 const showFlash = ref(false);
-/** Virtual mouse X position in pixels when pointer locked */
-const virtualMouseX = ref(0);
-/** Virtual mouse Y position in pixels when pointer locked */
-const virtualMouseY = ref(0);
 
 /** Timestamp of last mouse move event (for throttling) */
 let lastMouseMoveTime = 0;
 /** Minimum ms between mouse move events (~120 FPS) */
 const MOUSE_MOVE_THROTTLE_MS = 8;
+
+/** Timestamp of last touch move event (for throttling) */
+let lastTouchMoveTime = 0;
+/** Minimum ms between touch move events (~120 FPS) */
+const TOUCH_MOVE_THROTTLE_MS = 8;
+
+/** Whether touch input is currently active (finger down) */
+const isTouching = ref(false);
 
 /** Game controls composable (gamepad, fullscreen) */
 const gameControls = useGameControls(() =>
@@ -120,7 +122,6 @@ watch(isLoading, async (loading: boolean) => {
 });
 
 onMounted(async () => {
-  document.addEventListener("pointerlockchange", handlePointerLockChange);
   try {
     await startSession();
   } catch (err) {
@@ -131,16 +132,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(async () => {
-  document.removeEventListener("pointerlockchange", handlePointerLockChange);
-  if (document.pointerLockElement) {
-    document.exitPointerLock();
-  }
   await stopSession();
 });
-
-function handlePointerLockChange() {
-  isPointerLocked.value = document.pointerLockElement === videoRef.value;
-}
 
 // Store ICE servers from backend for WebRTC
 const iceServersFromBackend = ref<RTCIceServer[]>([]);
@@ -420,48 +413,22 @@ function handleMouseMove(event: MouseEvent) {
 
   const rect = videoRef.value.getBoundingClientRect();
   const { x_offset, y_offset, width, height } = touchscreenRegion.value;
+  const relX = (event.clientX - rect.left) / rect.width;
+  const relY = (event.clientY - rect.top) / rect.height;
 
-  // Calculate touchscreen zone size in pixels
-  const touchscreenWidthPx = rect.width * width;
-  const touchscreenHeightPx = rect.height * height;
-
-  let touchPixelX: number;
-  let touchPixelY: number;
-
-  if (isPointerLocked.value) {
-    // When pointer is locked, accumulate relative movements
-    virtualMouseX.value += event.movementX;
-    virtualMouseY.value += event.movementY;
-
-    // Clamp to touchscreen zone bounds
-    virtualMouseX.value = Math.max(0, Math.min(touchscreenWidthPx, virtualMouseX.value));
-    virtualMouseY.value = Math.max(0, Math.min(touchscreenHeightPx, virtualMouseY.value));
-
-    touchPixelX = virtualMouseX.value;
-    touchPixelY = virtualMouseY.value;
-  } else {
-    // When pointer is not locked, use absolute position
-    const relX = (event.clientX - rect.left) / rect.width;
-    const relY = (event.clientY - rect.top) / rect.height;
-
-    // Check if in touchscreen region
-    if (
-      relX < x_offset ||
-      relX > x_offset + width ||
-      relY < y_offset ||
-      relY > y_offset + height
-    ) {
-      return; // Outside touchscreen region
-    }
-
-    // Calculate mouse position in pixels within touchscreen zone
-    touchPixelX = (relX - x_offset) * rect.width;
-    touchPixelY = (relY - y_offset) * rect.height;
+  // Check if in touchscreen region
+  if (
+    relX < x_offset ||
+    relX > x_offset + width ||
+    relY < y_offset ||
+    relY > y_offset + height
+  ) {
+    return; // Outside touchscreen region
   }
 
-  // Normalize coordinates to 0-1 range for backend
-  const normalizedX = touchPixelX / touchscreenWidthPx;
-  const normalizedY = touchPixelY / touchscreenHeightPx;
+  // Normalize coordinates within the touchscreen region (0-1 range)
+  const normalizedX = (relX - x_offset) / width;
+  const normalizedY = (relY - y_offset) / height;
 
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
@@ -495,23 +462,21 @@ function handleMouseDown(event: MouseEvent) {
     return; // Outside touchscreen region
   }
 
-  function curve(v: number): number {
-    const sign = Math.sign(v);
-    const abs = Math.abs(v);
-    return sign * Math.pow(abs, 1.4); // 1.2–1.5 à tester
-  }
+  // Normalize coordinates within the touchscreen region (0-1 range)
+  const normalizedX = (relX - x_offset) / width;
+  const normalizedY = (relY - y_offset) / height;
 
-  // If not locked yet, request pointer lock (hide cursor)
-  if (!isPointerLocked.value) {
-    // Initialize virtual position to current mouse position within touchscreen zone
-    virtualMouseX.value = curve((relX - x_offset) * rect.width);
-    virtualMouseY.value = curve((relY - y_offset) * rect.height);
+  // Send position first, then mousedown (like touch events)
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "mousemove",
+      x: normalizedX,
+      y: normalizedY,
+      timestamp: Date.now(),
+    },
+  });
 
-    videoRef.value.requestPointerLock();
-    return; // Don't send click when requesting lock
-  }
-
-  // Send click only if pointer is already locked
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
     event: {
@@ -527,9 +492,6 @@ function handleMouseUp(event: MouseEvent) {
 
   event.preventDefault();
 
-  // Only send mouseup if pointer is locked
-  if (!isPointerLocked.value) return;
-
   socket.value.emit("retroarch-input", {
     session_id: sessionId.value,
     event: {
@@ -538,6 +500,140 @@ function handleMouseUp(event: MouseEvent) {
       timestamp: Date.now(),
     },
   });
+}
+
+/**
+ * Calculate normalized touch coordinates within the touchscreen region.
+ * Returns null if the touch is outside the touchscreen region.
+ */
+function calculateTouchCoordinates(touch: Touch): { x: number; y: number } | null {
+  if (!videoRef.value || !touchscreenRegion.value) return null;
+
+  const rect = videoRef.value.getBoundingClientRect();
+  const { x_offset, y_offset, width, height } = touchscreenRegion.value;
+
+  // Get touch position relative to video element (0-1 range)
+  const relX = (touch.clientX - rect.left) / rect.width;
+  const relY = (touch.clientY - rect.top) / rect.height;
+
+  // Check if touch is within the touchscreen region
+  if (
+    relX < x_offset ||
+    relX > x_offset + width ||
+    relY < y_offset ||
+    relY > y_offset + height
+  ) {
+    return null; // Outside touchscreen region
+  }
+
+  // Normalize coordinates within the touchscreen region (0-1 range)
+  const normalizedX = (relX - x_offset) / width;
+  const normalizedY = (relY - y_offset) / height;
+
+  return { x: normalizedX, y: normalizedY };
+}
+
+/**
+ * Handle touch start event - direct touch input for pointer-based cores.
+ * This bypasses the pointer lock mechanism for a more natural touch experience.
+ */
+function handleTouchStart(event: TouchEvent) {
+  if (!socket.value || !sessionId.value || !touchscreenRegion.value) return;
+
+  // Prevent default to avoid mouse emulation and scrolling
+  event.preventDefault();
+
+  const touch = event.touches[0];
+  if (!touch) return;
+
+  const coords = calculateTouchCoordinates(touch);
+  if (!coords) return; // Touch outside touchscreen region
+
+  isTouching.value = true;
+
+  // Send touch position first (move to touch location)
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "touchmove",
+      x: coords.x,
+      y: coords.y,
+      timestamp: Date.now(),
+    },
+  });
+
+  // Then send touch down (equivalent to mouse down)
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "touchstart",
+      x: coords.x,
+      y: coords.y,
+      button: 0,
+      timestamp: Date.now(),
+    },
+  });
+}
+
+/**
+ * Handle touch move event - track finger movement on touchscreen.
+ */
+function handleTouchMove(event: TouchEvent) {
+  if (!socket.value || !sessionId.value || !touchscreenRegion.value || !isTouching.value) return;
+
+  // Prevent default to avoid scrolling
+  event.preventDefault();
+
+  // Throttle touchmove events to prevent flooding
+  const now = Date.now();
+  if (now - lastTouchMoveTime < TOUCH_MOVE_THROTTLE_MS) {
+    return;
+  }
+  lastTouchMoveTime = now;
+
+  const touch = event.touches[0];
+  if (!touch) return;
+
+  const coords = calculateTouchCoordinates(touch);
+  if (!coords) return;
+
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "touchmove",
+      x: coords.x,
+      y: coords.y,
+      timestamp: Date.now(),
+    },
+  });
+}
+
+/**
+ * Handle touch end event - finger lifted from touchscreen.
+ */
+function handleTouchEnd(event: TouchEvent) {
+  if (!socket.value || !sessionId.value || !isTouching.value) return;
+
+  // Prevent default to avoid mouse emulation
+  event.preventDefault();
+
+  isTouching.value = false;
+
+  socket.value.emit("retroarch-input", {
+    session_id: sessionId.value,
+    event: {
+      type: "touchend",
+      button: 0,
+      timestamp: Date.now(),
+    },
+  });
+}
+
+/**
+ * Handle touch cancel event - touch interrupted (e.g., by system gesture).
+ */
+function handleTouchCancel(event: TouchEvent) {
+  handleTouchEnd(event);
 }
 
 function exitToGameDetails() {
@@ -664,6 +760,10 @@ function handleSettingsChanged(newSettings: any) {
       @mousemove="handleMouseMove"
       @mousedown="handleMouseDown"
       @mouseup="handleMouseUp"
+      @touchstart="handleTouchStart"
+      @touchmove="handleTouchMove"
+      @touchend="handleTouchEnd"
+      @touchcancel="handleTouchCancel"
     />
 
     <!-- Player Menu (EmulatorJS-like UI) -->
