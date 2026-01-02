@@ -41,10 +41,6 @@ services:
       - romm-valkey-dev
       - romm-postgres-dev
     command: /bin/bash -c "cd /app && bash"
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true

@@ -12,7 +12,6 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,16 +24,22 @@ logger = logging.getLogger(__name__)
 CORES_CONFIG_PATH = Path(__file__).parent.parent / "config" / "retroarch_cores.json"
 
 
-@lru_cache(maxsize=1)
+_cores_config_cache: Optional[dict[str, Any]] = None
+
+
 def load_cores_config() -> dict[str, Any]:
     """Load the RetroArch cores configuration from JSON file.
 
     Returns:
         dict: The full cores configuration including cores, platforms, and languages.
     """
+    global _cores_config_cache
+    if _cores_config_cache is not None:
+        return _cores_config_cache
     try:
         with open(CORES_CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            _cores_config_cache = json.load(f)
+            return _cores_config_cache
     except Exception as e:
         logger.error(f"Failed to load cores config from {CORES_CONFIG_PATH}: {e}")
         return {"cores": {}, "platforms": {}, "retroarch_languages": {}}
@@ -150,6 +155,58 @@ def get_cores_for_platform(platform_slug: str) -> list[str]:
     """
     config = load_cores_config()
     return config.get("platforms", {}).get(platform_slug.lower(), [])
+
+
+def get_core_upscale_option(core_name: str) -> Optional[dict[str, Any]]:
+    """Get internal resolution upscale option for a core.
+
+    Args:
+        core_name: Name of the libretro core.
+
+    Returns:
+        dict: Upscale option configuration with name, type, values, and base_height.
+    """
+    core_config = get_core_config(core_name)
+    if not core_config:
+        return None
+    return core_config.get("upscale_option")
+
+
+def calculate_upscale_value(
+    upscale_option: dict[str, Any],
+    max_height: int
+) -> Optional[str]:
+    """Calculate the optimal upscale value based on max height.
+
+    Args:
+        upscale_option: Upscale option configuration from core config.
+        max_height: Maximum target height from environment.
+
+    Returns:
+        str: The option value to use, or None if not applicable.
+    """
+    base_height = upscale_option.get("base_height", 240)
+    opt_type = upscale_option.get("type", "multiplier")
+    values = upscale_option.get("values", {})
+
+    # Calculate target multiplier
+    target_multiplier = max(1, max_height // base_height)
+
+    if opt_type == "multiplier":
+        # For multiplier type, find the closest available multiplier
+        max_mult = upscale_option.get("max", 8)
+        multiplier = min(target_multiplier, max_mult)
+        return str(multiplier)
+
+    elif opt_type == "preset":
+        # For preset type, find the largest multiplier <= target
+        best_key = "1"
+        for key in sorted(values.keys(), key=int):
+            if int(key) <= target_multiplier:
+                best_key = key
+        return values.get(best_key, values.get("1"))
+
+    return None
 
 
 
@@ -389,6 +446,18 @@ class RetroArchInstance:
                 f.write('video_max_swapchain_images = "2"\n')
                 f.write('video_font_enable = "true"\n')
 
+                # Calculate optimal video scale based on max height
+                max_height = int(os.getenv("RETROARCH_MAX_HEIGHT", "720"))
+                zone = get_core_pointer_zone(self.core.lower()) or {}
+                native = zone.get("native", [320, 240])
+                native_height = native[1] if len(native) > 1 else 240
+                video_scale = max(1, max_height // native_height)
+                f.write(f'video_scale = "{video_scale}"\n')
+                logger.info(
+                    f"[RetroArch Upscale] video_scale={video_scale} "
+                    f"(native {native[0]}x{native_height} -> max {max_height})"
+                )
+
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
                 f.write('audio_enable = "true"\n')
@@ -434,6 +503,19 @@ class RetroArchInstance:
                 for opt_name, opt_value in core_touch_opts.items():
                     self._write_core_language_option(
                         core_options_path, opt_name, opt_value
+                    )
+
+            # Apply internal resolution upscale for hardware-rendered cores
+            upscale_opt = get_core_upscale_option(self.core.lower())
+            if upscale_opt:
+                opt_name = upscale_opt.get("name")
+                upscale_value = calculate_upscale_value(upscale_opt, max_height)
+                if opt_name and upscale_value:
+                    self._write_core_language_option(
+                        core_options_path, opt_name, upscale_value
+                    )
+                    logger.info(
+                        f"[RetroArch Upscale] Set {opt_name}={upscale_value}"
                     )
 
             # Start RetroArch
