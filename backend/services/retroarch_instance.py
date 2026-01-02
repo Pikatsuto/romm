@@ -550,31 +550,21 @@ CORE_POINTER_ZONES = {
     # =========================================================================
     # GBA
     "mgba": {
-        "native": (240, 160)
+        "native": (240, 160),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "None",
     },
     # GB/GBC
     "gambatte": {
-        "native": (160, 144)
-    },
-    # SNES
-    "snes9x": {
-        "native": (256, 224)
-    },
-    # NES
-    "fceumm": {
-        "native": (256, 240)
-    },
-    # Genesis/Mega Drive
-    "genesis_plus_gx": {
-        "native": (320, 224)
-    },
-    # NES
-    "nestopia": {
-        "native": (256, 240)
-    },
-    # NES
-    "mesen": {
-        "native": (256, 240)
+        "native": (160, 144),
+        "white_zone_top": 0.0,
+        "white_zone_bottom": 0.0,
+        "white_zone_left": 0.0,
+        "white_zone_right": 0.0,
+        "type": "None",
     },
 }
 
