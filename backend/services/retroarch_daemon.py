@@ -14,10 +14,8 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import signal
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
 from config.config_manager import config_manager
@@ -445,15 +443,19 @@ class RetroArchDaemon:
             # The browser will scale up with nearest-neighbor (pixelated)
             zone = get_core_pointer_zone(session.core.lower()) or {}
             native = zone.get("native", (320, 240))
+            native_w, native_h = native
+
+            # Check if we need to rotate for horizontal cores in portrait mode
+            is_portrait_player = screen_height > screen_width
+            is_horizontal_core = native_w > native_h
+            needs_rotation = is_portrait_player and is_horizontal_core
 
             # Calculate multiplier to reach a reasonable encoding resolution
             # Too small = encoding artifacts, too large = performance issues
-            # Target: at least 480p height for good video encoding
             min_encoding_height = int(os.getenv("RETROARCH_MIN_HEIGHT", "480"))
             max_encoding_height = int(os.getenv("RETROARCH_MAX_HEIGHT", "720"))
 
             # Calculate multiplier based on native height
-            native_w, native_h = native
             min_multiplier = max(
                 1, (min_encoding_height + native_h - 1) // native_h
             )
@@ -467,15 +469,6 @@ class RetroArchDaemon:
             # Apply multiplier to get xvfb resolution
             xvfb_width = native_w * multiplier
             xvfb_height = native_h * multiplier
-
-            # Check if we need to rotate for horizontal cores in portrait mode
-            is_portrait_player = screen_height > screen_width
-            is_horizontal_core = native_w > native_h
-            needs_rotation = is_portrait_player and is_horizontal_core
-
-            if needs_rotation:
-                # Swap dimensions to create horizontal xvfb
-                xvfb_width, xvfb_height = xvfb_height, xvfb_width
 
             logger.info(
                 f"Using native resolution {native_w}x{native_h} "
@@ -659,36 +652,17 @@ class RetroArchDaemon:
             instance = self.instances[session_id]
             display_num = instance.display_num
 
-            # Force manual savestate as auto-save replacement
-            # Auto-save doesn't work reliably, so we create it manually
-            if (
-                instance.retroarch_process and
-                instance.retroarch_process.poll() is None
-            ):
-                rom_name = Path(instance.rom_path).stem
-                state_auto = instance.states_dir / f"{rom_name}.state.auto"
-                await instance._send_retroarch_command("SAVE_STATE")
-                await asyncio.sleep(5)
+            # Wait for SAVE_AND_QUIT to complete if in progress
+            wait_count = 0
+            while instance.save_and_quit_in_progress and wait_count < 50:
+                await asyncio.sleep(0.1)
+                wait_count += 1
 
-                # Find the latest state file created by RetroArch
-                latest_state = instance._get_latest_state_file()
-                if (
-                    latest_state and
-                    not latest_state.name.endswith(".state.auto")
-                ):
-                    # Copy to .state.auto (don't move, keep original)
-                    if state_auto.exists():
-                        state_auto.unlink()
-                    shutil.copy2(latest_state, state_auto)
-                    logger.info(f"Created auto-save from {latest_state.name}")
-
-                    # Capture screenshot for auto-save (.state.png)
-                    await instance._capture_state_screenshot()
-
-            # Sync saves/states to RomM before stopping
-            self._sync_session(session_id)
-
+            # Stop the instance (creates auto-save before terminating)
             await instance.stop()
+
+            # Sync saves/states to RomM
+            self._sync_session(session_id)
 
             # Cleanup session directory
             instance.cleanup_session_dir()

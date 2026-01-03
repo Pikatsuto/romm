@@ -89,6 +89,9 @@ def restore_state_to_session(
 ) -> Optional[str]:
     """Restore a state file from RomM to the session directory.
 
+    Source file in RomM may have core-specific name (e.g., rom.mgba.state.auto)
+    but it's restored as .state.auto for RetroArch's auto-load to work.
+
     Args:
         state_id: ID of the state to restore.
         user_id: User ID owning the state.
@@ -110,7 +113,8 @@ def restore_state_to_session(
             logger.warning(f"State file not found: {source_path}")
             return None
 
-        # Restore as .state.auto for RetroArch's savestate_auto_load to find it
+        # Source file in RomM has core-specific name (e.g., rom.mgba.state.auto)
+        # but RetroArch expects just .state.auto for auto-load to work
         rom_name = _get_rom_name_from_path(rom_path)
         dest_filename = f"{rom_name}.state.auto"
         dest_path = session_states_dir / dest_filename
@@ -314,11 +318,15 @@ def sync_states_to_romm(
                 continue
 
             try:
-                # For auto-save (.state.auto), keep the name as-is (unique, overwrites)
+                # For core-specific auto-save ({rom}.{core}.state.auto), sync as-is
                 # For files with timestamp (ROMName_YYYYMMDD_HHMMSS.*), sync as-is
-                # For plain .state0 without timestamp, skip (RetroArch's working file)
-                if state_file.name.endswith(".state.auto"):
+                # Skip plain .state.auto (restored files) and .state0 (working file)
+                if re.search(r"\.[a-z0-9_]+\.state\.auto$", state_file.name):
+                    # Core-specific auto-save (e.g., rom.mgba.state.auto)
                     dest_name = state_file.name
+                elif state_file.name.endswith(".state.auto"):
+                    # Plain .state.auto without core name - skip (restored file)
+                    continue
                 elif re.search(r"_\d{8}_\d{6}\.", state_file.name):
                     # Has timestamp, sync as-is
                     dest_name = state_file.name

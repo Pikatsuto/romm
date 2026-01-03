@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 # Path to the cores configuration JSON file
-CORES_CONFIG_PATH = Path(__file__).parent.parent / "config" / "retroarch_cores.json"
+CORES_CONFIG_PATH = (
+    Path(__file__).parent.parent / "config" / "retroarch_cores.json"
+)
 
 
 _cores_config_cache: Optional[dict[str, Any]] = None
@@ -31,7 +33,7 @@ def load_cores_config() -> dict[str, Any]:
     """Load the RetroArch cores configuration from JSON file.
 
     Returns:
-        dict: The full cores configuration including cores, platforms, and languages.
+        dict: The full cores configuration : cores, platforms, and languages.
     """
     global _cores_config_cache
     if _cores_config_cache is not None:
@@ -41,7 +43,8 @@ def load_cores_config() -> dict[str, Any]:
             _cores_config_cache = json.load(f)
             return _cores_config_cache
     except Exception as e:
-        logger.error(f"Failed to load cores config from {CORES_CONFIG_PATH}: {e}")
+        msg = f"Failed to load cores config from {CORES_CONFIG_PATH}: {e}"
+        logger.error(msg)
         return {"cores": {}, "platforms": {}, "retroarch_languages": {}}
 
 
@@ -68,7 +71,7 @@ def get_core_pointer_zone(core_name: str) -> Optional[dict[str, Any]]:
         core_name: Name of the libretro core.
 
     Returns:
-        dict: Pointer zone configuration in legacy format, or None if not found.
+        dict: Pointer zone configuration in legacy format, or None.
     """
     core_config = get_core_config(core_name)
     if not core_config:
@@ -164,7 +167,7 @@ def get_core_upscale_option(core_name: str) -> Optional[dict[str, Any]]:
         core_name: Name of the libretro core.
 
     Returns:
-        dict: Upscale option configuration with name, type, values, and base_height.
+        dict: Upscale option configuration : name, type, values, base_height.
     """
     core_config = get_core_config(core_name)
     if not core_config:
@@ -207,8 +210,6 @@ def calculate_upscale_value(
         return values.get(best_key, values.get("1"))
 
     return None
-
-
 
 
 class RetroArchInstance:
@@ -274,6 +275,9 @@ class RetroArchInstance:
         self.last_activity = datetime.now()
 
         self.touchscreen_region = self._calculate_touchscreen_region()
+
+        # Flag to indicate SAVE_AND_QUIT is in progress (prevents race condition)
+        self.save_and_quit_in_progress = False
 
         # Per-session directories
         self.session_dir = Path(f"/tmp/retroarch/{session_id}")
@@ -424,9 +428,9 @@ class RetroArchInstance:
                 f.write('notification_show_screenshot = "true"\n')
                 f.write('input_screenshot = "f8"\n')
 
-                # State slot, auto-save and auto-load
+                # State slot and auto-load
                 f.write('state_slot = "0"\n')
-                f.write('savestate_auto_save = "true"\n')
+                f.write('savestate_auto_save = "false"\n')
                 if self.state_path:
                     f.write('savestate_auto_load = "true"\n')
                 else:
@@ -495,7 +499,9 @@ class RetroArchInstance:
             upscale_opt = get_core_upscale_option(self.core.lower())
             if upscale_opt:
                 opt_name = upscale_opt.get("name")
-                upscale_value = calculate_upscale_value(upscale_opt, max_height)
+                upscale_value = calculate_upscale_value(
+                    upscale_opt, max_height
+                )
                 if opt_name and upscale_value:
                     self._write_core_language_option(
                         core_options_path, opt_name, upscale_value
@@ -891,18 +897,61 @@ class RetroArchInstance:
                 self.last_activity = datetime.now()
                 return None
 
-            await self._send_retroarch_command(retroarch_cmd)
-
-            # For SAVESTATE or SAVE_AND_QUIT, capture screenshot
-            # State file stays as .state0 for LOADSTATE to work
-            # Timestamping happens during sync to RomM
-            if command in ("SAVESTATE", "SAVE_AND_QUIT"):
-                await asyncio.sleep(1.0)  # Wait for state file to be written
-                await self._capture_manual_save_screenshot()
-
+            # For SAVE_AND_QUIT, take screenshot first then save and quit
             if command == "SAVE_AND_QUIT":
-                await asyncio.sleep(0.2)
-                await self._send_retroarch_command("QUIT")
+                self.save_and_quit_in_progress = True
+                try:
+                    core_name = self.core.lower()
+
+                    # Screenshot before save, then send save state command
+                    await self._capture_auto_save_screenshot(core_name)
+                    await self._send_retroarch_command(retroarch_cmd)
+                    await asyncio.sleep(1.0)
+
+                    rom_name = Path(self.rom_path).stem
+                    state_auto = (
+                        self.states_dir / f"{rom_name}.{core_name}.state.auto"
+                    )
+
+                    # Find the most recently modified state file
+                    if self.states_dir.exists():
+                        all_files = list(self.states_dir.iterdir())
+                        logger.info(
+                            f"Files in states dir: {[f.name for f in all_files]}"
+                        )
+
+                        state_files = [
+                            f for f in all_files
+                            if f.is_file() and ".state" in f.name
+                            and not f.name.endswith(".state.auto")
+                        ]
+
+                        if state_files:
+                            state_files.sort(
+                                key=lambda f: f.stat().st_mtime, reverse=True
+                            )
+                            latest = state_files[0]
+                            shutil.copy2(latest, state_auto)
+                            logger.info(
+                                f"Copied {latest.name} to {state_auto.name}"
+                            )
+                        else:
+                            logger.warning("No state file found to copy")
+                    else:
+                        logger.warning("States directory no longer exists")
+
+                    await asyncio.sleep(0.2)
+                    await self._send_retroarch_command("QUIT")
+                finally:
+                    self.save_and_quit_in_progress = False
+            elif command == "SAVESTATE":
+                # Screenshot before save to capture current game state
+                await self._capture_manual_save_screenshot()
+                await self._send_retroarch_command(retroarch_cmd)
+                await asyncio.sleep(1.0)
+                await self._copy_state_with_timestamp()
+            else:
+                await self._send_retroarch_command(retroarch_cmd)
 
             self.last_activity = datetime.now()
             return None
@@ -1047,34 +1096,19 @@ class RetroArchInstance:
             logger.error(f"Failed to rename state with timestamp: {e}")
 
     async def _capture_manual_save_screenshot(self):
-        """Capture screenshot and copy state file with matching timestamp.
+        """Capture screenshot before manual save state.
 
-        Finds the most recently modified state file and copies it.
-        Both screenshot and state copy are timestamped so they match in RomM.
+        Takes screenshot with timestamp and stores timestamp for later
+        use by _copy_state_with_timestamp().
         """
         try:
             rom_name = Path(self.rom_path).stem
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._last_save_timestamp = (
+                datetime.now().strftime("%Y%m%d_%H%M%S")
+            )
 
-            # Find the most recently modified state file (any extension)
-            state_file = self._get_latest_state_file()
-
-            if state_file:
-                # Get original extension (e.g., .state0, .state.auto, .state1)
-                # For .state.auto, suffix is just ".auto", so handle specially
-                if state_file.name.endswith(".state.auto"):
-                    ext = ".state.auto"
-                else:
-                    ext = state_file.suffix  # .state0, .state1, etc.
-
-                timestamped = self.states_dir / f"{rom_name}_{timestamp}{ext}"
-                shutil.copy2(state_file, timestamped)
-                logger.info(f"Copied state: {timestamped.name}")
-            else:
-                logger.warning("No state file found in states directory")
-
-            # Take screenshot with same timestamp
-            screenshot_name = f"{rom_name}_{timestamp}.png"
+            ts = self._last_save_timestamp
+            screenshot_name = f"{rom_name}_{ts}.png"
             screenshot_path = self.screenshots_dir / screenshot_name
 
             env = self._get_xdotool_env()
@@ -1103,20 +1137,50 @@ class RetroArchInstance:
         except Exception as e:
             logger.error(f"Failed to capture manual save screenshot: {e}")
 
-    async def _capture_state_screenshot(self):
-        """Capture a screenshot for auto-save.
+    async def _copy_state_with_timestamp(self):
+        """Copy state file with timestamp matching the screenshot.
 
-        Screenshot is named to match the auto-save's file_name_no_ext.
-        For .state.auto files, file_name_no_ext is ROMName.state,
-        so screenshot is ROMName.state.png.
+        Uses timestamp from previous _capture_manual_save_screenshot() call.
+        """
+        try:
+            timestamp = getattr(self, '_last_save_timestamp', None)
+            if not timestamp:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            rom_name = Path(self.rom_path).stem
+            state_file = self._get_latest_state_file()
+
+            if not state_file:
+                logger.warning("No state file found to copy")
+                return
+
+            # Get extension (.state0, .state.auto, etc.)
+            if state_file.name.endswith(".state.auto"):
+                ext = ".state.auto"
+            else:
+                ext = state_file.suffix
+
+            timestamped = self.states_dir / f"{rom_name}_{timestamp}{ext}"
+            shutil.copy2(state_file, timestamped)
+            logger.info(f"Copied state: {timestamped.name}")
+
+        except Exception as e:
+            logger.error(f"Failed to copy state with timestamp: {e}")
+
+    async def _capture_auto_save_screenshot(self, core_name: str):
+        """Capture a screenshot for core-specific auto-save.
+
+        Screenshot is named to match the auto-save file:
+        {rom_name}.{core_name}.state.png for {rom_name}.{core_name}.state.auto
+
+        Args:
+            core_name: Libretro core name (lowercase).
         """
         try:
             rom_name = Path(self.rom_path).stem
-            # Screenshot matches auto-save's file_name_no_ext (ROMName.state)
-            screenshot_name = f"{rom_name}.state.png"
+            screenshot_name = f"{rom_name}.{core_name}.state.png"
             screenshot_path = self.screenshots_dir / screenshot_name
 
-            # Take screenshot
             env = self._get_xdotool_env()
             game_w, game_h, x_off, y_off = self._calculate_game_crop()
             crop_geometry = f"{game_w}x{game_h}+{x_off}+{y_off}"
@@ -1134,13 +1198,13 @@ class RetroArchInstance:
             _, stderr = await proc.communicate()
 
             if proc.returncode != 0:
-                logger.error(f"State screenshot failed: {stderr.decode()}")
+                logger.error(f"Auto-save screenshot failed: {stderr.decode()}")
                 return
 
-            logger.info(f"State screenshot saved: {screenshot_path.name}")
+            logger.info(f"Auto-save screenshot: {screenshot_name}")
 
         except Exception as e:
-            logger.error(f"Failed to capture state screenshot: {e}")
+            logger.error(f"Failed to capture auto-save screenshot: {e}")
 
     async def _take_screenshot(self) -> Optional[bytes]:
         """Take a screenshot of the Xvfb display.
