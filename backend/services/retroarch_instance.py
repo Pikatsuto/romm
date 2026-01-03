@@ -404,10 +404,6 @@ class RetroArchInstance:
                     self._write_core_language_option(
                         core_options_path, option_name, lang_value
                     )
-                    logger.info(
-                        f"[RetroArch Language Debug] Set core option: "
-                        f"{option_name}={lang_value}"
-                    )
 
             config_path = f"/tmp/retroarch_{self.session_id}.cfg"
             with open(config_path, "w") as f:
@@ -453,10 +449,6 @@ class RetroArchInstance:
                 native_height = native[1] if len(native) > 1 else 240
                 video_scale = max(1, max_height // native_height)
                 f.write(f'video_scale = "{video_scale}"\n')
-                logger.info(
-                    f"[RetroArch Upscale] video_scale={video_scale} "
-                    f"(native {native[0]}x{native_height} -> max {max_height})"
-                )
 
                 # Audio settings - direct PulseAudio (PULSE_SINK sets sink)
                 f.write('audio_driver = "pulse"\n')
@@ -485,16 +477,10 @@ class RetroArchInstance:
                     pointer_port = pointer_zone.get("pointer_port")
                     pointer_device = pointer_zone.get("pointer_device")
                     if pointer_port is not None and pointer_device is not None:
-                        # Set the device type for the specified port
-                        # port 0 = p1, port 1 = p2, etc.
-                        port_num = pointer_port + 1  # RetroArch uses 1-indexed
+                        port_num = pointer_port + 1
                         var = f"input_libretro_device_p{port_num}"
                         value = f'"{pointer_device}"'
                         f.write(f'{var} = {value}\n')
-                        logger.info(
-                            f"[RetroArch Touch] Set port {port_num} to device "
-                            f"{pointer_device} for core {self.core}"
-                        )
 
             # Write core-specific touch options to core options file
             pointer_zone = get_core_pointer_zone(self.core.lower())
@@ -513,9 +499,6 @@ class RetroArchInstance:
                 if opt_name and upscale_value:
                     self._write_core_language_option(
                         core_options_path, opt_name, upscale_value
-                    )
-                    logger.info(
-                        f"[RetroArch Upscale] Set {opt_name}={upscale_value}"
                     )
 
             # Start RetroArch
