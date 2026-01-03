@@ -14,7 +14,8 @@
  * @component
  */
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, nextTick, computed } from "vue";
+import type { Emitter } from "mitt";
+import { onBeforeUnmount, onMounted, ref, watch, nextTick, computed, inject } from "vue";
 import { useRouter } from "vue-router";
 import type { FirmwareSchema, SaveSchema, StateSchema } from "@/__generated__";
 import { ROUTES } from "@/plugins/router";
@@ -23,6 +24,7 @@ import screenshotApi from "@/services/api/screenshot";
 import storeConfig from "@/stores/config";
 import storeLanguage from "@/stores/language";
 import type { DetailedRom } from "@/stores/roms";
+import type { Events } from "@/types/emitter";
 import { io, Socket } from "socket.io-client";
 import { storeToRefs } from "pinia";
 import { useGameControls } from "./useGameControls";
@@ -46,6 +48,7 @@ const props = defineProps<{
 
 // Vue Router and store references
 const router = useRouter();
+const emitter = inject<Emitter<Events>>("emitter");
 const configStore = storeConfig();
 const { config } = storeToRefs(configStore);
 const languageStore = storeLanguage();
@@ -309,6 +312,13 @@ function connectSocket(): Promise<void> {
     socket.value.on("retroarch-screenshot", async (data: { session_id: string; screenshot: string }) => {
       if (data.session_id === sessionId.value && data.screenshot) {
         await handleScreenshotReceived(data.screenshot);
+      }
+    });
+
+    // Listen for states refresh notification (after savestate sync)
+    socket.value.on("retroarch-states-refreshed", (data: { session_id: string; rom_id: number }) => {
+      if (data.session_id === sessionId.value && data.rom_id) {
+        emitter?.emit("retroarchStatesRefreshed", data.rom_id);
       }
     });
   });

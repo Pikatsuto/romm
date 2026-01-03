@@ -14,8 +14,10 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import signal
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from config.config_manager import config_manager
@@ -25,7 +27,8 @@ from handler.database import db_rom_handler
 from handler.redis_handler import async_cache
 
 from services.xvfb_manager import XvfbManager
-from services.retroarch_instance import RetroArchInstance, get_core_pointer_zone
+from services.retroarch_instance import RetroArchInstance
+from services.retroarch_instance import get_core_pointer_zone
 from services.retroarch_sync import (
     restore_save_to_session,
     restore_state_to_session,
@@ -295,6 +298,16 @@ class RetroArchDaemon:
                         f"retroarch:screenshot:{instance.session_id}",
                         json.dumps({"screenshot": screenshot_b64}),
                     )
+                # Sync after manual savestate and notify frontend
+                if command == "SAVESTATE":
+                    self._sync_session(instance.session_id)
+                    # Notify frontend to refresh states list
+                    await async_cache.publish(
+                        f"retroarch:states_refreshed:{instance.session_id}",
+                        json.dumps({"rom_id": self.session_metadata.get(
+                            instance.session_id, {}
+                        ).get("rom_id")})
+                    )
         elif channel == option_channel:
             option_name = data.get("option_name")
             option_value = data.get("option_value")
@@ -441,9 +454,15 @@ class RetroArchDaemon:
 
             # Calculate multiplier based on native height
             native_w, native_h = native
-            min_multiplier = max(1, (min_encoding_height + native_h - 1) // native_h)
-            max_multiplier = max(1, max_encoding_height // native_h)
-            multiplier = min(min_multiplier, max_multiplier)
+            min_multiplier = max(
+                1, (min_encoding_height + native_h - 1) // native_h
+            )
+            max_multiplier = max(
+                1, max_encoding_height // native_h
+            )
+            multiplier = min(
+                min_multiplier, max_multiplier
+            )
 
             # Apply multiplier to get xvfb resolution
             xvfb_width = native_w * multiplier
@@ -459,8 +478,8 @@ class RetroArchDaemon:
                 xvfb_width, xvfb_height = xvfb_height, xvfb_width
 
             logger.info(
-                f"Using native resolution {native_w}x{native_h} x{multiplier} = "
-                f"{xvfb_width}x{xvfb_height}"
+                f"Using native resolution {native_w}x{native_h} "
+                f"x{multiplier} = {xvfb_width}x{xvfb_height}"
                 + (" (rotated)" if needs_rotation else "")
             )
 
@@ -640,12 +659,31 @@ class RetroArchDaemon:
             instance = self.instances[session_id]
             display_num = instance.display_num
 
-            # Capture screenshot for auto-save before syncing
+            # Force manual savestate as auto-save replacement
+            # Auto-save doesn't work reliably, so we create it manually
             if (
                 instance.retroarch_process and
                 instance.retroarch_process.poll() is None
             ):
-                await instance._capture_state_screenshot()
+                rom_name = Path(instance.rom_path).stem
+                state_auto = instance.states_dir / f"{rom_name}.state.auto"
+                await instance._send_retroarch_command("SAVE_STATE")
+                await asyncio.sleep(5)
+
+                # Find the latest state file created by RetroArch
+                latest_state = instance._get_latest_state_file()
+                if (
+                    latest_state and
+                    not latest_state.name.endswith(".state.auto")
+                ):
+                    # Copy to .state.auto (don't move, keep original)
+                    if state_auto.exists():
+                        state_auto.unlink()
+                    shutil.copy2(latest_state, state_auto)
+                    logger.info(f"Created auto-save from {latest_state.name}")
+
+                    # Capture screenshot for auto-save (.state.png)
+                    await instance._capture_state_screenshot()
 
             # Sync saves/states to RomM before stopping
             self._sync_session(session_id)

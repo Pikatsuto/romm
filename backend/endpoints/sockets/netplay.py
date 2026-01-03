@@ -15,6 +15,39 @@ from handler.netplay_handler import NetplayPlayerInfo, NetplayRoom, netplay_hand
 from handler.socket_handler import netplay_socket_handler
 
 
+async def _wait_for_pubsub_message(channel: str, timeout_ms: int = 5000):
+    """Wait for a message on a Redis pubsub channel.
+
+    Args:
+        channel: Redis channel to subscribe to.
+        timeout_ms: Maximum wait time in milliseconds.
+
+    Returns:
+        Parsed JSON data from the message, or None if timeout.
+    """
+    from handler.redis_handler import async_cache
+    import json
+
+    pubsub = async_cache.pubsub()
+    iterations = timeout_ms // 100
+
+    try:
+        await pubsub.subscribe(channel)
+        for _ in range(iterations):
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=0.1
+            )
+            if message and message["type"] == "message":
+                return json.loads(message["data"])
+    except Exception:
+        pass
+    finally:
+        await pubsub.unsubscribe(channel)
+        await pubsub.close()
+
+    return None
+
+
 class RoomDataExtra(TypedDict):
     sessionid: str | None
     userid: str | None
@@ -403,39 +436,27 @@ async def retroarch_command(sid: str, data: dict):
         json.dumps(command_payload),
     )
 
-    # For SCREENSHOT command, wait for the screenshot data and send it back
+    # For SCREENSHOT, wait for data and send it back
     if command == "SCREENSHOT":
-        pubsub = async_cache.pubsub()
         channel = f"retroarch:screenshot:{session_id}"
+        data = await _wait_for_pubsub_message(channel)
+        if data:
+            await netplay_socket_handler.socket_server.emit(
+                "retroarch-screenshot",
+                {"session_id": session_id, "screenshot": data.get("screenshot")},
+                to=sid,
+            )
 
-        try:
-            await pubsub.subscribe(channel)
-            # Wait for screenshot data (max 5 seconds)
-            for _ in range(50):
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=0.1
-                )
-                if message and message["type"] == "message":
-                    try:
-                        screenshot_data = json.loads(message["data"])
-                        # Send screenshot to client
-                        await netplay_socket_handler.socket_server.emit(
-                            "retroarch-screenshot",
-                            {
-                                "session_id": session_id,
-                                "screenshot": screenshot_data.get("screenshot"),
-                            },
-                            to=sid,
-                        )
-                        break
-                    except json.JSONDecodeError:
-                        pass
-        except Exception as e:
-            import logging
-            logging.error(f"Error waiting for screenshot: {e}")
-        finally:
-            await pubsub.unsubscribe(channel)
-            await pubsub.close()
+    # For SAVESTATE, wait for sync and notify client to refresh states
+    if command == "SAVESTATE":
+        channel = f"retroarch:states_refreshed:{session_id}"
+        data = await _wait_for_pubsub_message(channel)
+        if data:
+            await netplay_socket_handler.socket_server.emit(
+                "retroarch-states-refreshed",
+                {"session_id": session_id, "rom_id": data.get("rom_id")},
+                to=sid,
+            )
 
 
 @netplay_socket_handler.socket_server.on("retroarch-set-core-option")  # type: ignore

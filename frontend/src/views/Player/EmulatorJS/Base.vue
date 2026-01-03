@@ -167,6 +167,12 @@ function unselectState() {
   localStorage.removeItem(`player:${rom.value?.platform_slug}:state_id`);
 }
 
+async function refreshStates(romId: number) {
+  if (!rom.value || rom.value.id !== romId) return;
+  const romResponse = await romApi.getRom({ romId });
+  rom.value = romResponse.data;
+}
+
 watch(selectedCore, (newSelectedCore) => {
   // Persist core selection to localStorage
   if (rom.value && newSelectedCore) {
@@ -209,6 +215,7 @@ onMounted(async () => {
   // Listen for save/state selection from dialogs
   emitter?.on("saveSelected", selectSave);
   emitter?.on("stateSelected", selectState);
+  emitter?.on("retroarchStatesRefreshed", refreshStates);
 
   // Determine default tab and selection (mutually exclusive)
   const compatibleStatesOnMount = rom.value.user_states.filter(
@@ -264,6 +271,7 @@ onBeforeUnmount(async () => {
   window.EJS_emulator?.callEvent("exit");
   emitter?.off("saveSelected", selectSave);
   emitter?.off("stateSelected", selectState);
+  emitter?.off("retroarchStatesRefreshed", refreshStates);
 });
 
 function openStateDialog() {

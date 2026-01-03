@@ -1502,21 +1502,20 @@
       "pointer_port": 1,
       "pointer_device": 6,
       "core_options": {
-        "melonds_touch_mode": "Touch",
-        "melonds_opengl_renderer": "enabled"
+        "melonds_touch_mode": "Touch"
       },
       "language_option": {
-        "name": "melonds_firmware_language",
+        "name": "melonds_language",
         "values": {
-          "en_US": "1",
-          "en_GB": "1",
-          "ja_JP": "0",
-          "fr_FR": "2",
-          "es_ES": "4",
-          "de_DE": "3",
-          "it_IT": "5"
+          "en_US": "English",
+          "en_GB": "English",
+          "ja_JP": "Japanese",
+          "fr_FR": "French",
+          "es_ES": "Spanish",
+          "de_DE": "German",
+          "it_IT": "Italian"
         },
-        "default": "1"
+        "default": "English"
       }
     }
   },

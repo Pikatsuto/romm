@@ -86,4 +86,5 @@ export type Events = {
   showAboutDialog: null;
   showNoteDialog: SimpleRom;
   playGame: number;
+  retroarchStatesRefreshed: number;
 };
