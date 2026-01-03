@@ -135,7 +135,6 @@ function loadSettings() {
     if (stored) {
       const parsed = JSON.parse(stored);
       Object.assign(settings.value, parsed);
-      console.log(`[RetroArch] Loaded settings for core ${props.core}:`, settings.value);
     }
   } catch (err) {
     console.error("[RetroArch] Failed to load settings:", err);

@@ -346,7 +346,6 @@ async function handleScreenshotReceived(screenshotBase64: string) {
     // Check if upload was successful
     const result = results[0];
     if (result.status === "fulfilled") {
-      console.log("[RetroArch] Screenshot saved successfully:", result.value);
     } else {
       console.error("[RetroArch] Failed to save screenshot:", result.reason);
     }
