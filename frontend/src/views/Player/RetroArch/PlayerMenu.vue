@@ -2,13 +2,12 @@
  * RetroArch Player Menu Component
  *
  * EmulatorJS-style overlay menu for RetroArch streaming player.
- * Provides quick access to save states, settings, and core options.
+ * Provides quick access to save states and settings.
  *
  * Features:
  * - Auto-hiding menu bar with mouse activity detection
  * - Quick save/load, screenshot, pause, restart controls
  * - Video, audio, input, and performance settings
- * - Dynamic core-specific options from backend
  * - Settings persistence in localStorage per core
  *
  * @component
@@ -28,8 +27,6 @@ const props = defineProps<{
   core: string;
   /** Whether player is in fullscreen mode */
   isFullscreen: boolean;
-  /** Core-specific options loaded from backend */
-  coreOptionsFromBackend: Record<string, string>;
   /** Container element for attaching dialogs (needed for fullscreen) */
   container?: HTMLElement;
   /** Whether the player is rotated (horizontal core in portrait fullscreen) */
@@ -124,9 +121,6 @@ const settings = ref({
   inputOverlay: false,
 });
 
-/** Core-specific options (loaded from backend, persisted locally) */
-const coreOptions = ref<Record<string, string | boolean>>({});
-
 /** Delay in ms before auto-hiding the menu bar */
 const MENU_HIDE_DELAY_MS = 3000;
 
@@ -151,70 +145,16 @@ function loadSettings() {
 function saveSettings() {
   try {
     localStorage.setItem(getStorageKey(), JSON.stringify(settings.value));
-    console.log(`[RetroArch] Saved settings for core ${props.core}:`, settings.value);
   } catch (err) {
     console.error("[RetroArch] Failed to save settings:", err);
   }
 }
 
-// Core options persistence (localStorage per core)
-function getCoreOptionsStorageKey() {
-  return `retroarch-core-options-${props.core}`;
-}
-
-function loadCoreOptions() {
-  try {
-    console.log(`[RetroArch] Loading core options from backend for ${props.core}:`, props.coreOptionsFromBackend);
-
-    // Try to load saved overrides from localStorage
-    const stored = localStorage.getItem(getCoreOptionsStorageKey());
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        // Merge backend options with localStorage overrides
-        coreOptions.value = { ...props.coreOptionsFromBackend, ...parsed };
-        console.log(`[RetroArch] Merged with localStorage overrides:`, coreOptions.value);
-      } catch (err) {
-        // If parsing fails, just use backend options
-        coreOptions.value = props.coreOptionsFromBackend;
-      }
-    } else {
-      // Use options from backend directly
-      coreOptions.value = props.coreOptionsFromBackend;
-    }
-
-    console.log(`[RetroArch] Final core options loaded (${Object.keys(coreOptions.value).length} options):`, coreOptions.value);
-  } catch (err) {
-    console.error("[RetroArch] Failed to load core options:", err);
-    coreOptions.value = {};
-  }
-}
-
-function saveCoreOptions() {
-  try {
-    localStorage.setItem(getCoreOptionsStorageKey(), JSON.stringify(coreOptions.value));
-    console.log(`[RetroArch] Saved core options for ${props.core}:`, coreOptions.value);
-  } catch (err) {
-    console.error("[RetroArch] Failed to save core options:", err);
-  }
-}
-
-// Watch settings changes and persist + emit
 watch(
   settings,
   (newSettings: typeof settings.value) => {
     saveSettings();
     emit("settingsChanged", newSettings);
-  },
-  { deep: true }
-);
-
-// Watch core options changes and persist + emit
-watch(
-  coreOptions,
-  () => {
-    saveCoreOptions();
-    emit("settingsChanged", settings.value);
   },
   { deep: true }
 );
@@ -310,13 +250,8 @@ function handleMouseMove() {
 }
 
 onMounted(() => {
-  // Load saved settings for this core
   loadSettings();
-  // Load core-specific options
-  loadCoreOptions();
-  // Start the auto-hide timer on mount
   resetHideMenuTimeout();
-  // Listen for orientation changes
   window.addEventListener("resize", updateOrientation);
 });
 
@@ -534,10 +469,6 @@ defineExpose({
             <v-icon start>mdi-speedometer</v-icon>
             Performance
           </v-tab>
-          <v-tab value="core" v-if="Object.keys(coreOptions).length > 0">
-            <v-icon start>mdi-chip</v-icon>
-            Core Options
-          </v-tab>
         </v-tabs>
 
         <v-divider />
@@ -747,42 +678,6 @@ defineExpose({
                     hide-details
                     color="primary"
                     thumb-label
-                    style="width: 200px"
-                  />
-                </template>
-              </v-list-item>
-            </v-list>
-          </v-window-item>
-
-          <!-- Core Options -->
-          <v-window-item value="core" v-if="Object.keys(coreOptions).length > 0">
-            <v-list density="compact">
-              <v-list-subheader class="text-caption">
-                {{ core }} specific options
-              </v-list-subheader>
-
-              <!-- Dynamic core options -->
-              <v-list-item
-                v-for="(value, key) in coreOptions"
-                :key="key"
-              >
-                <v-list-item-title>{{ key }}</v-list-item-title>
-                <template #append>
-                  <!-- Boolean option -->
-                  <v-switch
-                    v-if="typeof value === 'boolean'"
-                    v-model="coreOptions[key]"
-                    color="primary"
-                    hide-details
-                    density="compact"
-                  />
-                  <!-- String option -->
-                  <v-text-field
-                    v-else
-                    v-model="coreOptions[key]"
-                    variant="outlined"
-                    density="compact"
-                    hide-details
                     style="width: 200px"
                   />
                 </template>

@@ -87,9 +87,6 @@ const touchscreenRegion = ref<{
   height: number;
 } | null>(null);
 
-/** Core-specific options loaded from backend config */
-const coreOptions = ref<Record<string, string>>({});
-
 /** Whether to show the screenshot flash animation */
 const showFlash = ref(false);
 
@@ -170,7 +167,6 @@ async function startSession() {
 
     sessionId.value = data.session_id;
     touchscreenRegion.value = data.touchscreen_region || null;
-    coreOptions.value = data.core_options || {};
     needsRotation.value = data.needs_rotation || false;
 
     // Store ICE servers from backend (includes TURN if configured)
@@ -299,13 +295,6 @@ function connectSocket(): Promise<void> {
       clearTimeout(timeout);
       console.error("[RetroArch] SocketIO connection error:", err);
       reject(err);
-    });
-
-    // Listen for core options updates from backend
-    socket.value.on("retroarch-core-options-ready", (data: { session_id: string; core_options: Record<string, string> }) => {
-      if (data.session_id === sessionId.value) {
-        coreOptions.value = data.core_options;
-      }
     });
 
     // Listen for screenshot data from backend
@@ -802,9 +791,6 @@ function handleSettingsChanged(newSettings: any) {
         v-if="!isLoading && !error && sessionId && socket"
         :rom="rom"
         :core="core"
-        :session-id="sessionId"
-        :socket="socket"
-        :core-options-from-backend="coreOptions"
         :is-fullscreen="gameControls.isFullscreen.value"
         :container="containerRef"
         :needs-rotation="effectiveRotation && gameControls.isFullscreen.value"
